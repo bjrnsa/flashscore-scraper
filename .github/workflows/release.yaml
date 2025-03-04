@@ -28,6 +28,15 @@ jobs:
           # Install a specific version of uv.
           version: "0.5.10"
 
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install the project
+        run: uv sync --all-extras --dev
+
+      - name: Build source and wheel distribution
+        run: uv build
+
       - name: Extract tag and Details
         id: release
         run: |
@@ -77,15 +86,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        run: uv python install
-
-      - name: Install the project
-        run: uv sync --all-extras --dev
-
-      - name: Build source and wheel distribution
-        run: uv build
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
