@@ -1,0 +1,27 @@
+sports:
+  handball:
+    leagues:
+      - name: "Herre Handbold Ligaen"
+        country: "Denmark"
+        url: "https://www.flashscore.com/handball/denmark/herre-handbold-ligaen"
+        seasons: [2025, 2024]
+      - name: "Kvindeligaen Women"
+        country: "Denmark"
+        url: "https://www.flashscore.com/handball/denmark/kvindeligaen-women"
+        seasons: [2025, 2024]
+      - name: "Starligue"
+        country: "France"
+        url: "https://www.flashscore.com/handball/france/starligue"
+        seasons: [2025, 2024]
+  volleyball:
+    leagues:
+      - name: "PlusLiga"
+        country: "Poland"
+        url: "https://www.flashscore.com/volleyball/poland/plusliga"
+        seasons: [2025]
+  football:
+    leagues:
+      - name: "LaLiga"
+        country: "Spain"
+        url: "https://www.flashscore.com/football/spain/laliga"
+        seasons: [2025]
