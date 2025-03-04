@@ -1,16 +1,16 @@
 # Flashscore Scraper
 
-Build your own local sports database today! A powerful Python package for scraping sports data from Flashscore, enabling data-driven sports analytics, visualization projects, and betting models.
+A Python package for scraping sports data from Flashscore, enabling data-driven sports analytics, visualization projects, and betting models.
 
 ## Overview
 
 Flashscore Scraper is a flexible and efficient tool for collecting sports data from Flashscore.com. Whether you're building predictive models, analyzing team performance, or creating data visualizations, this package provides the foundation for your sports data needs.
 
 Currently supports:
-- Football (basic results)
+- Football (match results)
 - Handball (match results)
 - Volleyball (match results)
-- Betting odds data across supported sports
+- Historical betting odds data across supported sports
 
 ## Features
 
@@ -100,20 +100,79 @@ The scraper is built with a modular design:
 - **OddsDataScraper**: Collects betting odds data
 - **DatabaseManager**: Handles SQLite database operations
 
+## Data Loaders
+
+The package includes specialized data loaders for each supported sport, providing easy access to the collected data in pandas DataFrame format:
+
+### Base Features (All Sports)
+
+- Load match data with flexible filtering (league, season, date range)
+- Process JSON-based additional data fields
+- Load and merge odds data
+- Validate data consistency
+- Common features like team indices, goal differences, and total scores
+- Efficient SQLite database queries
+
+### Sport-Specific Loaders
+
+#### Football (`Football` class)
+- Goals and half-time scores
+- First and second half scoring
+- Example:
+```python
+from flashscore_scraper.data_loaders import Football
+
+loader = Football()
+df = loader.load_matches(
+    league="Premier League",
+    seasons=["2023/2024"],
+    include_additional_data=True
+)
+```
+
+#### Handball (`Handball` class)
+- Goals and half-time scores
+- First and second half scoring
+- Example:
+```python
+from flashscore_scraper.data_loaders import Handball
+
+loader = Handball()
+df = loader.load_matches(
+    league="Herre Handbold Ligaen",
+    include_additional_data=True
+)
+```
+
+#### Volleyball (`Volleyball` class)
+- Set scores and points per set (up to 5 sets)
+- Total points calculation
+- Set-specific validation
+- Example:
+```python
+from flashscore_scraper.data_loaders import Volleyball
+
+loader = Volleyball()
+df = loader.load_matches(
+    league="PlusLiga",
+    include_additional_data=True
+)
+```
+
 ## Current Limitations
 
 - Some corner cases where match results are not parseable
 - Limited sport coverage (currently football, handball, and volleyball)
-- Basic data validation and error handling
-- No built-in data analysis tools
+- Basic odds data validation
+- Limited built-in analysis tools
 
 ## Future Plans
 
 1. **Enhanced Modularity**: Create separate classes for each sport
-2. **Data Processing**: Add a data loader for pandas DataFrame conversion
-3. **Extended Coverage**: Support for more sports and data types
-4. **Improved Validation**: Better handling of edge cases
-5. **Analysis Tools**: Built-in functions for common analysis tasks
+2. **Extended Coverage**: Support for more sports and data types
+3. **Improved Validation**: Better handling of edge cases
+4. **Analysis Tools**: Built-in functions for common analysis tasks
+5. **Advanced Features**: Support for player statistics and advanced metrics
 
 ## Contributing
 
