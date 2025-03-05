@@ -421,11 +421,13 @@ class BaseDataLoader(ABC):
             )
             result_df[new_column_name] = pd.to_numeric(
                 result_df[new_column_name], errors="coerce"
-            )
+            ).astype("Int64")
+
+        result_df = result_df.drop(columns="additional_data")
 
         return result_df
 
-    def validate_data(self, df: pd.DataFrame) -> bool:
+    def validate_data(self, df: pd.DataFrame, warnings: bool = False) -> bool:
         """Validate the loaded data.
 
         Parameters
@@ -475,10 +477,11 @@ class BaseDataLoader(ABC):
 
         if invalid_result.any():
             invalid_matches = df[invalid_result].index.tolist()
-            self.logger.warning(
-                f"Found {len(invalid_matches)} matches with inconsistent results: "
-                f"{invalid_matches[:5]}"
-            )
+            if warnings:
+                self.logger.warning(
+                    f"Found {len(invalid_matches)} matches with inconsistent results: "
+                    f"{invalid_matches[:5]}"
+                )
 
         # Allow subclasses to perform additional validation
         self._validate_sport_specific(df)
@@ -534,14 +537,9 @@ class BaseDataLoader(ABC):
             away_index=lambda x: x["away_team"].map(self.team_to_idx),
         )
 
-        if "season" in df.columns:
-            df = df.assign(
-                season_year=lambda x: x["season"].str.split("/").str[1].astype(int),
-            )
-
         # Add goal difference and total goals
         df = df.assign(
-            goal_difference=lambda x: x[home_goals] - x[away_goals],
+            spread=lambda x: x[home_goals] - x[away_goals],
             total_goals=lambda x: x[home_goals] + x[away_goals],
         )
 
