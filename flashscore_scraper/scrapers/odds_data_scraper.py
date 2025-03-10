@@ -14,7 +14,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from tqdm import tqdm
 
 from flashscore_scraper.core.browser import BrowserManager
-from flashscore_scraper.exceptions import ParsingException, ValidationException
+from flashscore_scraper.exceptions import ParsingException
 from flashscore_scraper.models.base import MatchOdds
 from flashscore_scraper.scrapers.base import BaseScraper
 
@@ -132,6 +132,25 @@ class OddsDataScraper(BaseScraper):
             logger.error(f"Failed to fetch pending matches: {str(e)}")
             return []
 
+    def _create_odds_object(
+        self, match_id: str, sport_id: int, name: str, odds_values: List[float]
+    ) -> Optional[MatchOdds]:
+        try:
+            return (
+                MatchOdds(
+                    flashscore_id=match_id,
+                    sport_id=sport_id,
+                    bookmaker=name,
+                    home_odds=odds_values[0],
+                    draw_odds=odds_values[1] if len(odds_values) > 2 else 0.0,
+                    away_odds=odds_values[-1],
+                )
+                if odds_values
+                else None
+            )
+        except (ValidationError, IndexError):
+            return None
+
     def _parse_odds_row(
         self, odds_row: Tag, match_id: str, sport_id: int
     ) -> List[MatchOdds]:
@@ -159,75 +178,27 @@ class OddsDataScraper(BaseScraper):
             If the odds data fails validation.
         """
         results = []
-        try:
-            odds_contents = odds_row.find_all(class_="oddsRowContent")
-            if not odds_contents:
-                raise ParsingException("No odds content found")
+        for bookmaker in odds_row.find_all(class_="oddsRowContent"):
+            if not isinstance(bookmaker, Tag):
+                continue
 
-            for bookmaker in odds_contents:
-                try:
-                    if not isinstance(bookmaker, Tag):
-                        continue
+            img = bookmaker.find("img")
+            if not isinstance(img, Tag) or "alt" not in img.attrs:
+                continue
 
-                    img = bookmaker.find("img")
-                    if not isinstance(img, Tag) or "alt" not in img.attrs:
-                        continue
+            try:
+                odds_values = [
+                    float(el.text.strip() or 0)
+                    for el in bookmaker.find_all(class_="oddsValueInner")
+                ]
+                if odds := self._create_odds_object(
+                    match_id, sport_id, str(img["alt"]), odds_values
+                ):
+                    results.append(odds)
+            except (ValueError, AttributeError):
+                continue
 
-                    name = str(img["alt"])  # Convert to string explicitly
-                    odds_elements = bookmaker.find_all(class_="oddsValueInner")
-                    odds_values = [
-                        self._parse_odd(el.text.strip()) for el in odds_elements
-                    ]
-
-                    # Create and validate odds data
-                    if len(odds_elements) == 3 and all(odds_values):
-                        odds = MatchOdds(
-                            flashscore_id=match_id,
-                            sport_id=sport_id,
-                            bookmaker=name,
-                            home_odds=odds_values[0],
-                            draw_odds=odds_values[1],
-                            away_odds=odds_values[2],
-                        )
-                        results.append(odds)
-                    elif len(odds_elements) == 2 and all(odds_values):
-                        odds = MatchOdds(
-                            flashscore_id=match_id,
-                            sport_id=sport_id,
-                            bookmaker=name,
-                            home_odds=odds_values[0],
-                            draw_odds=0.0,
-                            away_odds=odds_values[1],
-                        )
-                        results.append(odds)
-
-                except ValidationError as e:
-                    logger.warning(f"Invalid odds data from {name}: {str(e)}")
-                except (AttributeError, KeyError) as e:
-                    logger.warning(f"Failed to parse odds from {name}: {str(e)}")
-
-            return results
-
-        except Exception as e:
-            raise ParsingException(f"Failed to parse odds row: {str(e)}") from e
-
-    def _parse_odd(self, value: str) -> float:
-        """Safely convert odd value to float.
-
-        Parameters
-        ----------
-        value : str
-            The odd value as a string.
-
-        Returns:
-        -------
-        float
-            The odd value as a float, or 0.0 if invalid.
-        """
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return 0.0
+        return results
 
     @sleep_and_retry
     @limits(calls=MAX_REQUESTS_PER_MINUTE, period=ONE_MINUTE)
@@ -285,12 +256,8 @@ class OddsDataScraper(BaseScraper):
                 soup = BeautifulSoup(driver.page_source, "html.parser")
                 odds_row = soup.find(class_="oddsRow")
 
-                if not odds_row:
-                    logger.warning(f"Odds row not found for match {match_id}")
-                    return results
-
-                if not isinstance(odds_row, Tag):
-                    logger.warning(f"Invalid odds row type for match {match_id}")
+                if not odds_row or not isinstance(odds_row, Tag):
+                    logger.warning(f"Invalid odds row for match {match_id}")
                     return results
 
                 try:
@@ -301,13 +268,9 @@ class OddsDataScraper(BaseScraper):
                         )
                     else:
                         logger.warning(f"No valid odds found for match {match_id}")
-                except (ParsingException, ValidationException) as e:
-                    logger.error(
-                        f"Failed to parse odds for match {match_id} ({sport_name}): {str(e)}"
-                    )
                 except Exception as e:
                     logger.error(
-                        f"Unexpected error processing match {match_id} ({sport_name}): {str(e)}"
+                        f"Failed to parse odds for match {match_id} ({sport_name}): {str(e)}"
                     )
 
         except Exception as e:

@@ -1,17 +1,21 @@
 sports:
   handball:
     leagues:
-      - name: "Herre Handbold Ligaen"
-        country: "Denmark"
-        url: "https://www.flashscore.com/handball/denmark/herre-handbold-ligaen"
-        seasons: [2025, 2024, 2023]
-      - name: "Kvindeligaen Women"
-        country: "Denmark"
-        url: "https://www.flashscore.com/handball/denmark/kvindeligaen-women"
-        seasons: [2025, 2024, 2023]
-      - name: "Starligue"
-        country: "France"
-        url: "https://www.flashscore.com/handball/france/starligue"
+      # - name: "Herre Handbold Ligaen"
+      #   country: "Denmark"
+      #   url: "https://www.flashscore.com/handball/denmark/herre-handbold-ligaen"
+      #   seasons: [2025, 2024, 2023]
+      # - name: "Kvindeligaen Women"
+      #   country: "Denmark"
+      #   url: "https://www.flashscore.com/handball/denmark/kvindeligaen-women"
+      #   seasons: [2025, 2024, 2023]
+      # - name: "Starligue"
+      #   country: "France"
+      #   url: "https://www.flashscore.com/handball/france/starligue"
+      #   seasons: [2025, 2024, 2023]
+      - name: "Liga ASOBAL"
+        country: "Spain"
+        url: "https://www.flashscore.com/handball/spain/liga-asobal"
         seasons: [2025, 2024, 2023]
       # - name: "European Championship"
       #   country: "Europe"
