@@ -95,6 +95,24 @@ class DatabaseManager:
                 )
             """)
 
+            # Create fixtures table for upcoming matches
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS fixtures (
+                    flashscore_id TEXT PRIMARY KEY,
+                    sport_id INTEGER NOT NULL,
+                    country TEXT,
+                    league TEXT,
+                    season TEXT,
+                    match_info TEXT,
+                    datetime TEXT,
+                    home_team TEXT,
+                    away_team TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (flashscore_id) REFERENCES match_ids (match_id),
+                    FOREIGN KEY (sport_id) REFERENCES sports (id)
+                )
+            """)
+
     def register_sport(self, sport_name: str) -> int:
         """Register a new sport in the database.
 

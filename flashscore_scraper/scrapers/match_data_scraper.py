@@ -116,7 +116,9 @@ class MatchDataScraper(BaseScraper):
                     FROM match_ids m
                     JOIN sports s ON m.sport_id = s.id
                     LEFT JOIN match_data d ON m.match_id = d.flashscore_id
-                    WHERE d.flashscore_id IS NULL
+                    LEFT JOIN fixtures f ON m.match_id = f.flashscore_id
+                    WHERE d.flashscore_id IS NULL  -- No match data yet
+                    AND f.flashscore_id IS NULL    -- Not currently a fixture
                     ORDER BY s.name, m.created_at
                 """)
                 matches = cursor.fetchall()
@@ -191,7 +193,7 @@ class MatchDataScraper(BaseScraper):
         sport_id: int,
         sport_name: str,
     ) -> Optional[Dict[str, Any]]:
-        """Process a single match with optimized browser usage.
+        """Process a single match, handling both completed matches and fixtures.
 
         Parameters
         ----------
@@ -209,12 +211,13 @@ class MatchDataScraper(BaseScraper):
         Returns:
         -------
         Optional[Dict[str, Any]]
-            Match data if successful, None otherwise
+            Match data if successful, None if failed to parse either match or fixture data
         """
         with browser.get_driver(url) as driver:
             for _ in range(self.MAX_RETRIES):
                 soup = self._scrape_site(driver)
                 try:
+                    # First try to parse as a completed match
                     details = self._match_results(soup, match_id, sport_id).model_dump()
                     additional = self._parse_additional_details(soup, sport_name)
 
@@ -227,9 +230,27 @@ class MatchDataScraper(BaseScraper):
                             }
                         )
                         return details
+
                 except (ParsingException, ValidationException) as e:
-                    logger.warning(f"Retry needed for {match_id}: {str(e)}")
-                    time.sleep(self.CLICK_DELAY)
+                    logger.debug(
+                        f"Not a completed match {match_id}, attempting fixture parse: {str(e)}"
+                    )
+                    try:
+                        # Try to parse as a fixture
+                        fixture_data = self._parse_fixture_data(
+                            soup, match_id, sport_id
+                        )
+                        if fixture_data:
+                            logger.info(
+                                f"Successfully parsed fixture data for {match_id}"
+                            )
+                            # Store in fixtures table
+                            if self._store_fixture(fixture_data):
+                                return None  # Return None as we don't want to process this as match_data
+                    except Exception as fixture_e:
+                        logger.warning(f"Failed to parse as fixture: {str(fixture_e)}")
+                        time.sleep(self.CLICK_DELAY)
+                        continue
 
             logger.error(f"Max retries exceeded for match {match_id}")
             return None
@@ -572,6 +593,116 @@ class MatchDataScraper(BaseScraper):
                 continue
 
         return details if details else None
+
+    def _parse_fixture_data(
+        self, soup: BeautifulSoup, match_id: str, sport_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Extract fixture data from page content.
+
+        Parameters
+        ----------
+        soup : BeautifulSoup
+            Parsed page content
+        match_id : str
+            FlashScore match ID
+        sport_id : int
+            Sport ID from database
+
+        Returns:
+        -------
+        Optional[Dict[str, Any]]
+            Fixture data if successful, None if parsing failed
+        """
+        try:
+            # Extract tournament header
+            header = soup.find("span", class_="tournamentHeader__country")
+            if not header or not isinstance(header, Tag):
+                raise ParsingException("Could not find tournament header")
+
+            # Extract datetime
+            dt_header = soup.find("div", class_="duelParticipant__startTime")
+            if not dt_header:
+                raise ParsingException("Could not find start time")
+            dt_str = dt_header.text
+            dt_str, month, year = self._parse_datetime(dt_str)
+
+            # Extract teams
+            home_team = soup.select_one(
+                ".duelParticipant__home .participant__participantName"
+            )
+            away_team = soup.select_one(
+                ".duelParticipant__away .participant__participantName"
+            )
+            if not home_team or not away_team:
+                raise ParsingException("Could not find team names")
+
+            # Extract tournament info
+            tournament_info = header.text
+            try:
+                country = tournament_info.split(":")[0].strip()
+                league = tournament_info.split(":")[1].strip().split("-")[0].strip()
+                match_info = tournament_info.split(" - ")[-1].strip()
+            except IndexError:
+                raise ParsingException("Invalid tournament info format")
+
+            return {
+                "flashscore_id": match_id,
+                "sport_id": sport_id,
+                "country": country,
+                "league": league,
+                "season": self._calculate_season(month, year),
+                "match_info": match_info,
+                "datetime": dt_str,
+                "home_team": home_team.text.strip(),
+                "away_team": away_team.text.strip(),
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to parse fixture data: {str(e)}")
+            return None
+
+    def _store_fixture(self, fixture_data: Dict[str, Any]) -> bool:
+        """Store fixture data in the fixtures table.
+
+        Parameters
+        ----------
+        fixture_data : Dict[str, Any]
+            Dictionary containing fixture information
+
+        Returns:
+        -------
+        bool
+            True if storage was successful, False otherwise
+        """
+        query = """
+            INSERT INTO fixtures
+            (flashscore_id, sport_id, country, league, season,
+             match_info, datetime, home_team, away_team)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(flashscore_id) DO UPDATE SET
+            datetime = excluded.datetime,
+            match_info = excluded.match_info
+        """
+        try:
+            with self.db_manager.get_cursor() as cursor:
+                cursor.execute(
+                    query,
+                    (
+                        fixture_data["flashscore_id"],
+                        fixture_data["sport_id"],
+                        fixture_data["country"],
+                        fixture_data["league"],
+                        fixture_data["season"],
+                        fixture_data["match_info"],
+                        fixture_data["datetime"],
+                        fixture_data["home_team"],
+                        fixture_data["away_team"],
+                    ),
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to store fixture: {str(e)}")
+            return False
 
     def _store_batch(self, data: List[Dict[str, Any]]) -> bool:
         """Store batch of match records.

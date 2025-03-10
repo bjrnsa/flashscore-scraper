@@ -68,44 +68,42 @@ class OddsDataScraper(BaseScraper):
 
     def _fetch_pending_matches(
         self, match_ids: Optional[List[str]] = None
-    ) -> List[Tuple[str, str, int]]:
+    ) -> List[Tuple[str, str, int, str]]:
         """Get matches that need odds data collection.
 
-        Queries the database for matches that don't have associated odds data yet.
-        Can be filtered to specific match IDs if provided.
+        Fetches only completed matches without odds data.
 
         Parameters
         ----------
         match_ids : Optional[List[str]], optional
             List of specific match IDs to check for pending odds data.
             If None, checks all matches in the database.
-            Defaults to None.
 
         Returns:
         -------
-        List[Tuple[str, str, int]]
-            List of tuples containing:
-            - match_id (str): The FlashScore match identifier
-            - sport_name (str): Name of the sport
-            - sport_id (int): Database ID of the sport
-            Empty list if no pending matches are found.
-
-        Notes:
-        -----
-        The query joins the match_ids and sports tables, then left joins with
-        odds_data to find matches without odds information.
+        List[Tuple[str, str, int, str]]
+            List of tuples containing (match_id, sport_name, sport_id, match_type)
         """
         try:
             # Base query to find matches without odds data
             query = """
-                SELECT
+                SELECT DISTINCT
                     m.match_id,
                     s.name as sport_name,
-                    s.id as sport_id
+                    s.id as sport_id,
+                    CASE
+                        WHEN f.flashscore_id IS NOT NULL THEN 'fixture'
+                        ELSE 'completed'
+                    END as match_type
                 FROM match_ids m
                 JOIN sports s ON m.sport_id = s.id
+                -- Check for completed matches only
+                LEFT JOIN match_data md ON m.match_id = md.flashscore_id
                 LEFT JOIN odds_data o ON m.match_id = o.flashscore_id
+                LEFT JOIN fixtures f ON m.match_id = f.flashscore_id
                 WHERE o.flashscore_id IS NULL
+                AND md.flashscore_id IS NOT NULL  -- Only include completed matches
+                AND f.flashscore_id IS NULL         -- Exclude fixtures
             """
 
             # Add match ID filter if specified
@@ -114,7 +112,7 @@ class OddsDataScraper(BaseScraper):
                     raise ValueError("match_ids must be a list of strings")
                 if not all(isinstance(id_, str) for id_ in match_ids):
                     raise ValueError("All match IDs must be strings")
-                # Handle single ID case properly
+
                 if len(match_ids) == 1:
                     query += " AND m.match_id = ?"
                     params = (match_ids[0],)
@@ -322,45 +320,27 @@ class OddsDataScraper(BaseScraper):
         batch_size: int = DEFAULT_BATCH_SIZE,
         headless: bool = True,
         match_ids: Optional[List[str]] = None,
-    ) -> Dict[str, int]:
+    ) -> Dict[str, Dict[str, int]]:
         """Orchestrate the odds scraping workflow with progress tracking.
-
-        This method coordinates the entire scraping process, including:
-        - Fetching pending matches from the database
-        - Grouping matches by sport for efficient processing
-        - Managing browser sessions and rate limiting
-        - Batch processing odds data for database storage
-        - Progress tracking and error handling
 
         Parameters
         ----------
         batch_size : int, optional
             Number of matches to process before storing to database.
-            Smaller batches reduce memory usage but increase database writes.
-            Defaults to DEFAULT_BATCH_SIZE (10).
         headless : bool, optional
-            Whether to run the browser in headless mode. Set to False for
-            debugging or visual verification. Defaults to True.
+            Whether to run the browser in headless mode.
         match_ids : Optional[List[str]], optional
-            Specific match IDs to scrape odds for. If None, processes all
-            pending matches in the database. Defaults to None.
+            Specific match IDs to scrape odds for.
 
         Returns:
         -------
-        Dict[str, int]
-            Dictionary mapping sport names to number of matches processed.
-            Example: {'football': 100, 'basketball': 50}
-            Note: Counts include matches attempted, even if odds weren't found.
-
-        Notes:
-        -----
-        The method uses batch processing to optimize database operations and
-        includes progress bars for monitoring long-running scrapes. Failed
-        matches are logged but don't stop the overall process.
+        Dict[str, Dict[str, int]]
+            Dictionary mapping sport names to counts of processed matches by type.
+            Example: {'football': {'fixtures': 10, 'completed': 15}}
         """
         try:
             browser = self.get_browser(headless)
-            results = {}
+            results: Dict[str, Dict[str, int]] = {}
 
             # Get pending matches
             matches = self._fetch_pending_matches(match_ids)
@@ -369,33 +349,33 @@ class OddsDataScraper(BaseScraper):
                 return results
 
             # Group matches by sport
-            sport_matches: Dict[str, List[Tuple[str, int]]] = {}
-            for match_id, sport_name, sport_id in matches:
+            sport_matches: Dict[str, List[Tuple[str, int, str]]] = {}
+            for match_id, sport_name, sport_id, match_type in matches:
                 if sport_name not in sport_matches:
                     sport_matches[sport_name] = []
-                sport_matches[sport_name].append((match_id, sport_id))
+                sport_matches[sport_name].append((match_id, sport_id, match_type))
 
             # Process each sport's matches
             for sport_name, sport_data in sport_matches.items():
                 logger.info(f"Processing {sport_name} odds...")
-                # Track matches and their odds separately
                 match_buffer: Dict[str, List[MatchOdds]] = {}
                 processed_matches = 0
+                sport_results = {"fixtures": 0, "completed": 0}
 
                 with tqdm(
                     total=len(sport_data), desc=f"Scraping {sport_name} odds"
                 ) as pbar:
-                    for match_id, sport_id in sport_data:
+                    for match_id, sport_id, match_type in sport_data:
                         try:
                             if odds_list := self._process_match_odds(
                                 match_id, sport_id, sport_name, browser
                             ):
                                 match_buffer[match_id] = odds_list
                                 processed_matches += 1
+                                sport_results[match_type] += 1
 
-                                # Store batch when we have enough unique matches
+                                # Store batch when we have enough matches
                                 if processed_matches >= batch_size:
-                                    # Flatten all odds for storage while maintaining match grouping
                                     batch_odds = [
                                         odds
                                         for match_odds in match_buffer.values()
@@ -426,9 +406,10 @@ class OddsDataScraper(BaseScraper):
                         if not self._store_batch(batch_odds):
                             logger.error("Failed to store final batch")
 
-                results[sport_name] = len(sport_data)
+                results[sport_name] = sport_results
                 logger.info(
-                    f"Completed {sport_name}: processed {len(sport_data)} matches with odds from {len(batch_odds)} bookmakers"
+                    f"Completed {sport_name}: processed {sport_results['fixtures']} fixtures "
+                    f"and {sport_results['completed']} completed matches"
                 )
 
             return results
@@ -468,9 +449,10 @@ class OddsDataScraper(BaseScraper):
                 logger.error("No valid records to store")
                 return False
 
-            # Construct and execute insert query
+            # Use REPLACE to handle cases where odds might change
+            # between fixture and completed match states
             query = """
-                INSERT INTO odds_data (
+                INSERT OR REPLACE INTO odds_data (
                     flashscore_id, sport_id, bookmaker,
                     home_odds, draw_odds, away_odds
                 ) VALUES (?, ?, ?, ?, ?, ?)
@@ -490,5 +472,7 @@ if __name__ == "__main__":
     scraper = OddsDataScraper(db_path="database/database.db")
     results = scraper.scrape(headless=True, batch_size=5)
 
-    for sport, count in results.items():
-        print(f"Scraped {count} matches for {sport}")
+    for sport, counts in results.items():
+        print(
+            f"Scraped {counts['fixtures']} fixtures and {counts['completed']} completed matches for {sport}"
+        )
