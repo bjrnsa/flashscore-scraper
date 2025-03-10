@@ -77,21 +77,30 @@ class DatabaseManager:
                 )
             """)
 
-            # Create odds data table (generic for all sports)
+            # Create bookmakers table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bookmakers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL
+                )
+            """)
+
+            # Modify odds_data table to reference bookmakers
             # Draw odds can be null
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS odds_data (
                     id INTEGER PRIMARY KEY,
                     flashscore_id TEXT,
                     sport_id INTEGER NOT NULL,
-                    bookmaker TEXT,
+                    bookmaker_id INTEGER NOT NULL,
                     home_odds REAL,
                     draw_odds REAL,
                     away_odds REAL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (flashscore_id) REFERENCES match_ids (match_id),
                     FOREIGN KEY (sport_id) REFERENCES sports (id),
-                    UNIQUE(flashscore_id, bookmaker)
+                    FOREIGN KEY (bookmaker_id) REFERENCES bookmakers (id),
+                    UNIQUE(flashscore_id, bookmaker_id)
                 )
             """)
 
@@ -372,22 +381,3 @@ class DatabaseManager:
 
 if __name__ == "__main__":
     db_manager = DatabaseManager(db_path="database/database.db")
-    db_manager.override_match_result(
-        "hMmAicbk",
-        {
-            "sport_id": 1,
-            "country": "DENMARK",
-            "league": "Herre Handbold Ligaen",
-            "season": "2024/2025",
-            "match_info": "Round 10",
-            "datetime": "08.02.2025 14:30",
-            "home_team": "Grindsted",
-            "away_team": "Ribe-Esbjerg",
-            "home_score": 27,
-            "away_score": 27,
-            "result": 1,
-            "additional_data": {
-                "override_reason": "Administrative decision - illegal player"
-            },
-        },
-    )

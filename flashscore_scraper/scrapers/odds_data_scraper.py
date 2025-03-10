@@ -14,7 +14,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from tqdm import tqdm
 
 from flashscore_scraper.core.browser import BrowserManager
-from flashscore_scraper.exceptions import ParsingException
 from flashscore_scraper.models.base import MatchOdds
 from flashscore_scraper.scrapers.base import BaseScraper
 
@@ -395,18 +394,63 @@ class OddsDataScraper(BaseScraper):
             True if successful, False otherwise
         """
         try:
-            # Prepare records from validated models
-            records = [
-                (
-                    odds.flashscore_id,
-                    odds.sport_id,
-                    odds.bookmaker,
-                    odds.home_odds,
-                    odds.draw_odds,
-                    odds.away_odds,
-                )
-                for odds in odds_list
-            ]
+            records = []
+            with self.db_manager.get_cursor() as cursor:
+                for odds in odds_list:
+                    bookmaker_name = (
+                        odds.bookmaker
+                    )  # Capture bookmaker name for logging
+                    bookmaker_id = None  # Initialize bookmaker_id
+
+                    try:
+                        # Fetch bookmaker_id from bookmakers table, or insert if not exists
+                        cursor.execute(
+                            """
+                            INSERT OR IGNORE INTO bookmakers (name) VALUES (?)
+                            """,
+                            (bookmaker_name,),
+                        )
+                        cursor.execute(
+                            """
+                            SELECT id FROM bookmakers WHERE name = ?
+                            """,
+                            (bookmaker_name,),
+                        )
+                        result = cursor.fetchone()
+                        if result:
+                            bookmaker_id = result[0]
+                        else:
+                            logger.error(
+                                f"Could not fetch bookmaker_id for name: {bookmaker_name} even after INSERT OR IGNORE"
+                            )
+                            continue  # Skip to the next odds record if bookmaker_id cannot be fetched
+                    except Exception as e:
+                        logger.error(
+                            f"Error fetching bookmaker_id for {bookmaker_name}: {e}"
+                        )
+                        continue  # Skip to the next odds record if there's an error
+
+                    if (
+                        bookmaker_id is None
+                    ):  # Double check if bookmaker_id is still None
+                        logger.error(
+                            f"bookmaker_id is None for bookmaker: {bookmaker_name}. Skipping record."
+                        )
+                        continue  # Skip to the next odds record if bookmaker_id is None
+
+                    records.append(
+                        (
+                            odds.flashscore_id,
+                            odds.sport_id,
+                            bookmaker_id,
+                            odds.home_odds,
+                            odds.draw_odds,
+                            odds.away_odds,
+                        )
+                    )
+                    logger.debug(
+                        f"Prepared record for {odds.flashscore_id} with bookmaker_id: {bookmaker_id} ({bookmaker_name})"
+                    )
 
             if not records:
                 logger.error("No valid records to store")
@@ -416,8 +460,7 @@ class OddsDataScraper(BaseScraper):
             # between fixture and completed match states
             query = """
                 INSERT OR REPLACE INTO odds_data (
-                    flashscore_id, sport_id, bookmaker,
-                    home_odds, draw_odds, away_odds
+                    flashscore_id, sport_id, bookmaker_id, home_odds, draw_odds, away_odds
                 ) VALUES (?, ?, ?, ?, ?, ?)
             """
 

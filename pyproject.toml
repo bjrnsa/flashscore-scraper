@@ -63,7 +63,7 @@ exclude = [
 allow-direct-references = true
 
 [tool.ruff.lint]
-select = ["D"]
+select = ["D", "F"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
