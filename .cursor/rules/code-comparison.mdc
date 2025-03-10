@@ -1,0 +1,61 @@
+---
+description: This file contains rules to ensure accurate and precise reporting when comparing or describing code changes, focusing on quantitative metrics like line counts and percentage reductions.
+globs: 
+alwaysApply: false
+---
+# Code Comparison Rules
+
+
+<rule>
+name: code_comparison_accuracy
+description: Enforces accurate reporting of code changes and metrics
+auto_attach: true  
+
+filters:
+  - type: event
+    pattern: "code_comparison|code_modification|code_analysis"
+
+actions:
+  - type: enforce
+    conditions:
+      - Before making any quantitative statements about code changes:
+        1. Count the exact number of lines in the original file
+        2. Count the exact number of lines in the modified file
+        3. Calculate the exact difference and percentage change
+        4. Use precise language when reporting changes
+        5. Include the method used for counting (e.g., lines of code, including/excluding blank lines, comments, etc.) {{ CLARIFIED counting method }}
+
+      - When discussing code optimizations:
+        1. Specify which parts of the code were modified
+        2. Provide exact metrics for the changes
+        3. Avoid approximate numbers unless explicitly stated as estimates
+        4. If estimating, clearly label it as an estimate and explain the basis
+
+      - For partial file comparisons:
+        1. Explicitly state that only a portion is being compared
+        2. Specify the line ranges being compared
+        3. Note any context that might be missing
+
+examples:
+  - incorrect: "The code is now about 35% shorter"
+  - correct: "The code was reduced from 423 to 312 lines (26.2% reduction), including blank lines and comments"
+
+  - incorrect: "~160 lines from ~400 lines"
+  - correct: "Original: 412 lines, Modified: 385 lines (27 lines removed, 6.5% reduction)"
+
+validation:
+  - Verify all numbers before stating them
+  - Double-check calculations
+  - Use exact counts rather than approximations
+  - Include the basis for any metrics provided
+  - Validate the calculation of percentage change for accuracy {{ ADDED percentage change validation }}
+
+metadata:
+  priority: high
+  tags:
+    - code-quality
+    - accuracy
+    - metrics
+    - documentation
+    - line-count-accuracy {{ ADDED line-count-accuracy tag }}
+</rule>
