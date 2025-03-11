@@ -272,21 +272,103 @@ class MatchDataScraper(BaseScraper):
             return None
 
     def _parse_football_details(self, soup: BeautifulSoup) -> Optional[Dict[str, int]]:
-        period_mapping = {
-            "1st Half": "first_half",
-            "2nd Half": "second_half",
-            "Extra Time": "extra_time",
-            "Penalties": "penalties",
-        }
-        return self._parse_match_parts(
-            soup, period_mapping, ["wcl-overline_rOFfd", "wcl-scores-overline-02_n9EXm"]
-        )
+        """Parse football-specific match details.
+
+        Parameters
+        ----------
+        soup : BeautifulSoup
+            Parsed page content
+
+        Returns:
+        -------
+        Optional[Dict[str, int]]
+            Football match details if available, None otherwise
+        """
+        try:
+            # Extract all period score elements
+            match_parts = soup.find_all(
+                class_="wcl-overline_rOFfd wcl-scores-overline-02_n9EXm"
+            )
+
+            if not match_parts:
+                return None
+
+            # Map period names to standardized keys
+            period_mapping = {
+                "1st Half": "first_half",
+                "2nd Half": "second_half",
+                "Extra Time": "extra_time",
+                "Penalties": "penalties",
+            }
+
+            details: Dict[str, int] = {}
+            for i, part in enumerate(match_parts):
+                period_name = part.text.strip()
+                if period_name in period_mapping:
+                    try:
+                        # Get the score element that follows the period name
+                        score_text = match_parts[i + 1].text.strip()
+                        home_score, away_score = map(int, score_text.split("-"))
+
+                        key = period_mapping[period_name]
+                        details[f"home_score_{key}"] = home_score
+                        details[f"away_score_{key}"] = away_score
+                    except (IndexError, ValueError, AttributeError):
+                        logger.warning(f"Failed to parse score for {period_name}")
+                        continue
+
+            return details if details else None
+
+        except Exception as e:
+            logger.error(f"Error parsing football details: {str(e)}")
+            return None
 
     def _parse_handball_details(self, soup: BeautifulSoup) -> Optional[Dict[str, int]]:
-        period_mapping = {"First half": "h1", "Second half": "h2"}
-        return self._parse_match_parts(
-            soup, period_mapping, ["smh__part", "smh__home", "smh__away"]
-        )
+        """Parse handball-specific match details.
+
+        Parameters
+        ----------
+        soup : BeautifulSoup
+            Parsed page content
+
+        Returns:
+        -------
+        Optional[Dict[str, int]]
+            Handball match details if available, None otherwise
+        """
+        try:
+            match_parts = self._get_match_parts(soup)
+            if not match_parts:
+                return None
+
+            home_parts, away_parts = match_parts
+            details: Dict[str, int] = {}
+
+            # Map period indices to score keys
+            period_mapping = {
+                0: ("h1", "First half"),
+                1: ("h2", "Second half"),
+            }
+
+            for i, (home_part, away_part) in enumerate(zip(home_parts, away_parts)):
+                if i not in period_mapping:
+                    continue
+
+                try:
+                    period_key, period_name = period_mapping[i]
+                    home_value = int(home_part.get_text(strip=True))
+                    away_value = int(away_part.get_text(strip=True))
+                    details[f"home_score_{period_key}"] = home_value
+                    details[f"away_score_{period_key}"] = away_value
+                except (ValueError, AttributeError):
+                    logger.warning(f"Failed to parse score for {period_name}")
+                    continue
+
+            return details if details else None
+
+        except Exception as e:
+            logger.error(f"Error parsing handball details: {str(e)}")
+            return None
 
     def _parse_volleyball_details(
         self, soup: BeautifulSoup
@@ -310,12 +392,29 @@ class MatchDataScraper(BaseScraper):
     def _get_match_parts(
         self, soup: BeautifulSoup
     ) -> Optional[Tuple[List[Tag], List[Tag]]]:
+        """Extract match part elements for handball and volleyball matches.
+
+        Parameters
+        ----------
+        soup : BeautifulSoup
+            Parsed page content
+
+        Returns:
+        -------
+        Optional[Tuple[List[Tag], List[Tag]]]
+            Tuple of (home_parts, away_parts) if found, None otherwise
+        """
         try:
+            # Convert ResultSet to List[Tag] by filtering and converting
             home_parts = [
                 tag
                 for tag in soup.find_all(
                     "div",
-                    class_=lambda c: "smh__part" in str(c) and "smh__home" in str(c),
+                    class_=lambda c: self._class_filter(
+                        c,
+                        ["smh__part", "smh__home"],
+                        ["smh__part--current", "smh__participantName"],
+                    ),
                 )
                 if isinstance(tag, Tag)
             ]
@@ -323,12 +422,22 @@ class MatchDataScraper(BaseScraper):
                 tag
                 for tag in soup.find_all(
                     "div",
-                    class_=lambda c: "smh__part" in str(c) and "smh__away" in str(c),
+                    class_=lambda c: self._class_filter(
+                        c,
+                        ["smh__part", "smh__away"],
+                        ["smh__part--current", "smh__participantName"],
+                    ),
                 )
                 if isinstance(tag, Tag)
             ]
-            return (home_parts, away_parts) if home_parts and away_parts else None
-        except Exception:
+
+            if not home_parts or not away_parts:
+                logger.debug("No match parts found")
+                return None
+
+            return home_parts, away_parts
+        except Exception as e:
+            logger.error(f"Error getting match parts: {str(e)}")
             return None
 
     def _parse_fixture_data(

@@ -13,14 +13,14 @@ sports:
       #   country: "France"
       #   url: "https://www.flashscore.com/handball/france/starligue"
       #   seasons: [2025, 2024, 2023]
-      - name: "Liga ASOBAL"
-        country: "Spain"
-        url: "https://www.flashscore.com/handball/spain/liga-asobal"
+      # - name: "Liga ASOBAL"
+      #   country: "Spain"
+      #   url: "https://www.flashscore.com/handball/spain/liga-asobal"
+      #   seasons: [2025, 2024, 2023]
+      - name: "Handbollsligan Women"
+        country: "Sweden"
+        url: "https://www.flashscore.com/handball/sweden/handbollsligan-women"
         seasons: [2025, 2024, 2023]
-      # - name: "European Championship"
-      #   country: "Europe"
-      #   url: "https://www.flashscore.com/handball/europe/european-championship"
-      #   seasons: [2025]
 
   # volleyball:
   #   leagues:

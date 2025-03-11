@@ -135,8 +135,18 @@ class OddsPortalScraper(BaseScraper):
         str
             Generated URL
         """
-        home = home_team.replace(".", "").replace("/", "-")
-        away = away_team.replace(".", "").replace("/", "-")
+        home = (
+            home_team.replace(".", "")
+            .replace("/", "-")
+            .replace("W", "")
+            .replace(" ", "")
+        )
+        away = (
+            away_team.replace(".", "")
+            .replace("/", "-")
+            .replace("W", "")
+            .replace(" ", "")
+        )
         url = f"{self.BASE_URL}/handball/{country}/{league}/{home}-{away}"
         url = url.lower().replace(" ", "-")
         url = url + f"-{flashscore_id}/"
@@ -159,67 +169,61 @@ class OddsPortalScraper(BaseScraper):
             logger.debug("No cookie banner found")
 
     def _parse_odds_page(self, driver) -> Dict[str, List[float]]:
-        """Parse odds from loaded page.
-
-        Parameters
-        ----------
-        driver
-            Selenium WebDriver instance
-
-        Returns:
-        -------
-        Dict[str, List[float]]
-            Dictionary mapping bookmakers to odds lists
-        """
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        elements = soup.find_all("p", class_="height-content")
+        elements = soup.find_all(
+            "a", class_="min-mt:!flex text-color-black hidden underline"
+        )
 
-        bookmaker_odds = {}
-
-        def is_bookmaker_element(elem):
-            """Check if an element is a bookmaker element."""
-            return "pl-4" in elem.get("class", []) and "height-content" in elem.get(
-                "class", []
+        if elements:
+            no_odds_message = soup.find(
+                "div", string="No odds available for this match"
             )
+            if no_odds_message:
+                return no_odds_message.text.strip()
 
-        def is_odds_element(elem):
-            """Check if an element is an odds element."""
-            return "height-content" in elem.get("class", [])
+            bookmaker_odds = {}
 
-        # Get all height-content elements
-        elements = soup.find_all("p", class_="height-content")
+            for element in elements:
+                bookmaker_name = element["href"].split("/")[2]
+                odds_value = element.text.strip()
 
-        i = 0
-        while i < len(elements):
-            # Skip non-bookmaker elements
-            if not is_bookmaker_element(elements[i]):
-                i += 1
-                continue
+                try:
+                    odds_value = float(odds_value)
+                except ValueError:
+                    continue
 
-            # Found a bookmaker
-            bookmaker = elements[i].text.strip()
-            odds = []
+                if bookmaker_name not in bookmaker_odds:
+                    bookmaker_odds[bookmaker_name] = []
 
-            # Look for the next 3 odds elements
-            j = i + 1
-            while j < len(elements) and len(odds) < 3:
-                if is_odds_element(elements[j]):
-                    try:
-                        odds.append(float(elements[j].text.strip()))
-                    except ValueError:
-                        odds.append(None)
-                j += 1
+                bookmaker_odds[bookmaker_name].append(odds_value)
 
-            # Only add if we found some odds
-            if odds:
-                bookmaker_odds[bookmaker] = odds
+            bookmaker_odds = {k: v for k, v in bookmaker_odds.items() if len(v) == 3}
 
-            if bookmaker == "William Hill":
-                break
-
-            # Move to the next potential bookmaker
-            i = j
-
+        else:
+            bookmakers = [
+                elem.text.strip().replace(" ", "-").lower()
+                for elem in soup.find_all("p", class_="height-content pl-4")
+            ]
+            n_bookmakers = len(bookmakers)
+            elements = soup.find_all("p", class_="height-content")[
+                4 : 4 * n_bookmakers + 4
+            ]
+            elements = [
+                elements[i + j]
+                for i in range(1, len(elements), 4)
+                for j in range(3)
+                if i + j < len(elements)
+            ]
+            all_odds = []
+            for elem in elements:
+                try:
+                    all_odds.append(float(elem.text.strip()))
+                except ValueError:
+                    all_odds.append(1.0)
+            bookmaker_odds = {
+                bookmakers[i]: all_odds[i * 3 : (i + 1) * 3]
+                for i in range(n_bookmakers)
+            }
         return bookmaker_odds
 
     @sleep_and_retry
@@ -250,14 +254,18 @@ class OddsPortalScraper(BaseScraper):
                 match["match_id"],
             )
             logger.info(f"Processing {url}")
+            max_retries = 10
 
             with browser.get_driver(url) as driver:
                 odds_data = []
+                n_retries = 0
                 while not odds_data:
+                    n_retries += 1
                     odds_data = self._parse_odds_page(driver)
+                    if n_retries >= max_retries:
+                        return None
 
-                if not odds_data:
-                    logger.warning(f"No odds found for {match['match_id']}")
+                if isinstance(odds_data, str):
                     return None
 
             return {
@@ -366,15 +374,14 @@ class OddsPortalScraper(BaseScraper):
                 logger.info(f"Processing {sport_match['sport_name']} odds...")
                 processed_matches = 0
                 sport_results = {"fixtures": 0, "completed": 0}
-                result = self._process_single_match(sport_match, browser)
 
                 try:
                     if result := self._process_single_match(sport_match, browser):
                         self.current_batch.append(result)
                         processed_matches += 1
-                        sport_results[sport_match["match_type"]] += 1
+                        # sport_results[sport_match["match_type"]] += 1
 
-                        if processed_matches >= batch_size:
+                        if len(self.current_batch) >= batch_size:
                             if self._store_batch():
                                 processed_matches = 0
                             else:
@@ -404,4 +411,4 @@ class OddsPortalScraper(BaseScraper):
 
 if __name__ == "__main__":
     scraper = OddsPortalScraper()
-    scraper.scrape()
+    scraper.scrape(headless=False)

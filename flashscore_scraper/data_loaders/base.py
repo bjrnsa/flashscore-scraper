@@ -359,6 +359,66 @@ class BaseDataLoader(ABC):
             self.logger.error(f"Error loading odds: {str(e)}")
             raise
 
+    def load_fixtures(
+        self,
+        league: Optional[str] = None,
+        seasons: Optional[List[str]] = None,
+    ) -> pd.DataFrame:
+        """Load fixture data for given league and seasons.
+
+        Parameters
+        ----------
+        league : Optional[str], optional
+            League name to filter by, by default None
+        seasons : Optional[List[str]], optional
+            List of season identifiers to filter by, by default None
+
+        Returns:
+        -------
+        pd.DataFrame
+            DataFrame containing fixture data
+
+        Raises:
+        ------
+        sqlite3.Error
+            If there is a database error
+        """
+        try:
+            # Build query for fixture data
+            query = """
+                SELECT
+                    f.flashscore_id, f.country, f.league, f.season,
+                    f.datetime, f.home_team, f.away_team
+                FROM fixtures f
+                WHERE f.sport_id = ?
+            """
+            params = [self.sport_id]
+
+            # Add league filter if specified
+            if league:
+                query += " AND f.league = ?"
+                params.append(league)
+
+            # Add season filter if specified
+            if seasons:
+                season_placeholders = ", ".join(["?" for _ in seasons])
+                query += f" AND f.season IN ({season_placeholders})"
+                params.extend(seasons)
+
+            # Execute query
+            df = pd.read_sql(
+                query,
+                self.conn,
+                params=params,
+                parse_dates={"datetime": {"format": self.date_format}},
+            )
+
+            return df
+
+        except sqlite3.Error as e:
+            self.logger.error(f"Database error loading fixtures: {str(e)}")
+            raise
+
     def process_additional_data(
         self,
         df: pd.DataFrame,
