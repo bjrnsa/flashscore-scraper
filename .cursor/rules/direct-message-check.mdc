@@ -1,0 +1,49 @@
+---
+description: Guidelines for providing concise, direct code fixes without unnecessary explanation.
+globs: *.*
+alwaysApply: false
+---
+# Direct Message Check
+
+Enforces direct, concise responses for code fix requests.
+
+<rule>
+name: direct_message_check
+description: Enforces direct, concise responses for code fix requests.
+auto_attach: true
+filters:
+  - type: file_extension
+    pattern: "\\.(js|ts|py|java|cpp|jsx|tsx|html|css|scss|md|yaml|json)$"
+  - type: event
+    pattern: "code_fix|code_modification"
+
+actions:
+  - type: enforce
+    message: |
+      When responding to code fix requests:
+      1. Provide the exact code fix immediately.
+      2. Skip explanations unless explicitly requested.
+      3. Only suggest examples if user interaction is needed.
+      4. Focus on the specific code section mentioned.
+
+  - type: warn
+    conditions:
+      - pattern: "(?s).*?(here's how|let me explain|to understand).*?"
+        message: "Avoid explanatory text. Provide direct code fixes only."
+
+examples:
+  - input: "How do I check for 'No odds available' in this code?"
+    output: |
+      no_odds_message = soup.find("div", string="No odds available for this match")
+      if no_odds_message:
+          return {}
+      (Adhered to the Direct Message Check rule by providing a direct code fix without unnecessary explanation.)
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - code-fixes
+    - conciseness
+    - direct-response
+</rule>

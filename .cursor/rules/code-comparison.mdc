@@ -1,6 +1,6 @@
 ---
 description: This file contains rules to ensure accurate and precise reporting when comparing or describing code changes, focusing on quantitative metrics like line counts and percentage reductions.
-globs: 
+globs: *.*
 alwaysApply: false
 ---
 # Code Comparison Rules

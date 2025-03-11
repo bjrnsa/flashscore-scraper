@@ -1,0 +1,41 @@
+---
+description: Enforces reporting of adherence to cursor rules to enhance transparency and accountability in interactions.
+globs: *.*
+alwaysApply: false
+---
+# Adherence Reporting
+
+Enforces reporting of adherence to cursor rules to enhance transparency and accountability in interactions.
+
+<rule>
+name: adherence_reporting
+description: Enforces reporting of adherence to cursor rules to enhance transparency and accountability in interactions.
+auto_attach: true
+filters:
+  - type: event
+    pattern: "user_interaction|code_request|code_fix"
+
+actions:
+  - type: enforce
+    message: |
+      Whenever a cursor rule is adhered to in a response:
+      1. Inform the user explicitly that the response follows a specific cursor rule.
+      2. Provide a brief description of the rule adhered to.
+      3. Allow the user to monitor adherence to the rules effectively.
+
+examples:
+  - input: "How do I check for 'No odds available' in this code?"
+    output: |
+      no_odds_message = soup.find("div", string="No odds available for this match")
+      if no_odds_message:
+          return {}
+      (Adhered to the Direct Message Check rule by providing a direct code fix without unnecessary explanation.)
+
+metadata:
+  priority: high
+  version: 1.0
+  tags:
+    - adherence
+    - monitoring
+    - accountability
+</rule>

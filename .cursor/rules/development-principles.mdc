@@ -5,16 +5,13 @@ alwaysApply: false
 ---
 # Development Principles
 
-Guidelines for maintaining high-quality code and following senior developer practices.
+Enforces development principles that promote code quality, efficiency, and senior-level practices.
 
 <rule>
 name: development_principles
 description: Enforces development principles that promote code quality, efficiency, and senior-level practices.
+auto_attach: true
 filters:
-  # Match all code files
-  - type: file_extension
-    pattern: "\\.(js|ts|py|java|cpp|jsx|tsx|html|css|scss|md|yaml|json)$"
-  # Match file modifications and creations
   - type: event
     pattern: "file_create|file_modify"
 
@@ -22,74 +19,12 @@ actions:
   - type: suggest
     message: |
       Development Principles Checklist:
-
-      1. Code Efficiency:
-         ✓ Minimize code length without sacrificing readability
-         ✓ Remove redundant or unnecessary code
-         ✓ Use appropriate design patterns
-
-      2. Senior Developer Approach:
-         ✓ Consider scalability and maintainability
-         ✓ Implement robust error handling
-         ✓ Use proven architectural patterns
-
-      3. Problem Analysis:
-         ✓ Document three key considerations before implementation
-         ✓ Identify potential edge cases
-         ✓ Consider performance implications
-
-      4. State Management:
-         ✓ Document current state
-         ✓ List unresolved issues
-         ✓ Track recent changes
-
-      5. Solution Evaluation:
-         ✓ Present two alternative approaches
-         ✓ Compare pros and cons
-         ✓ Justify final selection
-
-      6. Implementation Strategy:
-         ✓ Break down into essential steps
-         ✓ Preserve existing comments
-         ✓ Validate each step
-
-  - type: warn
-    conditions:
-      - pattern: "(?s).*?\\bTODO\\b.*?\\n.*?\\bTODO\\b"
-        message: "Multiple TODOs detected. Consider implementing features completely before moving on."
-
-      - pattern: "(?s)/\\*.*?\\*/\\s*(?:/\\*.*?\\*/)"
-        message: "Consider consolidating multiple comment blocks for better readability."
-
-  - type: suggest
-    conditions:
-      - pattern: "function.*?\\{[^}]{200,}\\}"
-        message: |
-          Large function detected. Consider:
-          1. Breaking down into smaller, focused functions
-          2. Extracting reusable components
-          3. Implementing proper separation of concerns
-
-customization:
-  - Users can adjust warning thresholds
-  - Customize file types to monitor
-  - Add project-specific guidelines
-
-examples:
-  - input: |
-      // TODO: Implement feature A
-      function someFunction() {
-        // TODO: Add error handling
-        // Complex implementation...
-      }
-    output: "Warning: Multiple TODOs detected. Consider completing implementation."
-
-  - input: |
-      function complexFunction() {
-        // Very long implementation...
-        // (200+ lines of code)
-      }
-    output: "Suggestion: Consider breaking down complex function into smaller units."
+      1. Code Efficiency: Minimize code length without sacrificing readability.
+      2. Senior Developer Approach: Consider scalability and maintainability.
+      3. Problem Analysis: Document key considerations before implementation.
+      4. State Management: Document current state and unresolved issues.
+      5. Solution Evaluation: Present alternative approaches and justify selection.
+      6. Implementation Strategy: Break down into essential steps.
 
 metadata:
   priority: high
