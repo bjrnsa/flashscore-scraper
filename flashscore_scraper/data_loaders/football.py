@@ -19,16 +19,16 @@ class Football(BaseDataLoader):
 
     # football-specific column mappings
     COLUMN_MAPPINGS: Dict[str, str] = {
-        "home_score": "home_goals",
-        "away_score": "away_goals",
+        "home_goals": "home_goals",
+        "away_goals": "away_goals",
     }
 
     # Required additional data fields for football
     REQUIRED_ADDITIONAL_FIELDS: Dict[str, str] = {
-        "home_score_1st_half": "home_goals_h1",
-        "away_score_1st_half": "away_goals_h1",
-        "home_score_2nd_half": "home_goals_h2",
-        "away_score_2nd_half": "away_goals_h2",
+        "home_goals_1st_half": "home_goals_h1",
+        "away_goals_1st_half": "away_goals_h1",
+        "home_goals_2nd_half": "home_goals_h2",
+        "away_goals_2nd_half": "away_goals_h2",
     }
 
     def __init__(

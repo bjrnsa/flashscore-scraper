@@ -1,4 +1,4 @@
-"""Module for flexible sports data scraping with filtering capabilities."""
+"""Module for flexible sport_ids_id data scraping with filtering capabilities."""
 
 import logging
 from typing import Dict, List, Mapping, Optional, Set, TypedDict, Union
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class MatchRecord(TypedDict):
     """Type definition for match record dictionary."""
 
-    match_id: str
+    flashscore_id: str
     sport_name: str
     sport_id: int
     country: str
@@ -62,8 +62,8 @@ class FlexibleScraper(BaseScraper):
             to either single strings or lists of strings. Defaults to None.
 
             Supported filters:
-            - sports: List[str]
-                Names of sports to include (e.g., ["football", "basketball"])
+            - sport_ids: List[str]
+                Names of sport_ids to include (e.g., ["football", "basketball"])
             - leagues: List[str]
                 Names of leagues to include (e.g., ["Premier League", "La Liga"])
             - seasons: List[str]
@@ -119,7 +119,7 @@ class FlexibleScraper(BaseScraper):
             - Filter values contain invalid characters
         """
         # Define valid filter keys and validate
-        valid_filter_keys = {"sports", "leagues", "seasons", "countries"}
+        valid_filter_keys = {"sport_ids", "leagues", "seasons", "countries"}
         if invalid_keys := set(self.filters.keys()) - valid_filter_keys:
             raise ValueError(
                 f"Invalid filter keys: {invalid_keys}. "
@@ -201,7 +201,7 @@ class FlexibleScraper(BaseScraper):
         params = []
 
         filter_mappings = {
-            "sports": ("s.name", "sports"),
+            "sport_ids": ("s.name", "sport_ids"),
             "leagues": ("m.league", "leagues"),
             "seasons": ("m.season", "seasons"),
             "countries": ("m.country", "countries"),
@@ -228,15 +228,15 @@ class FlexibleScraper(BaseScraper):
         List[MatchRecord]
             List of matching match records
         """
-        # Use INNER JOIN for sports since it's a required relationship
+        # Use INNER JOIN for sport_ids since it's a required relationship
         # Use EXISTS for better performance than LEFT JOIN with IS NULL
         query = """
-            SELECT m.match_id, s.name as sport_name, s.id as sport_id
-            FROM match_ids m
-            INNER JOIN sports s ON m.sport_id = s.id
+            SELECT m.flashscore_id, s.name as sport_name, s.id as sport_id
+            FROM flashscore_ids m
+            INNER JOIN sport_ids s ON m.sport_id = s.id
             WHERE NOT EXISTS (
                 SELECT 1 FROM {table} d
-                WHERE d.flashscore_id = m.match_id
+                WHERE d.flashscore_id = m.flashscore_id
             )
         """.format(table="odds_data" if odds else "match_data")
 
@@ -287,7 +287,7 @@ class FlexibleScraper(BaseScraper):
                 match_count = len(matches)
                 sport_count = len(set(m["sport_name"] for m in matches))
                 logger.info(
-                    f"Found {match_count} matches to scrape across {sport_count} sports"
+                    f"Found {match_count} matches to scrape across {sport_count} sport_ids"
                 )
 
                 try:
@@ -311,15 +311,15 @@ class FlexibleScraper(BaseScraper):
                     sport_count = len(set(m["sport_name"] for m in odds_matches))
                     logger.info(
                         f"Found {odds_count} matches requiring odds collection "
-                        f"across {sport_count} sports"
+                        f"across {sport_count} sport_ids"
                     )
 
                     try:
-                        match_ids = [m["match_id"] for m in odds_matches]
+                        flashscore_ids = [m["flashscore_id"] for m in odds_matches]
                         results["odds"] = self.odds_scraper.scrape(
                             headless=headless,
                             batch_size=batch_size,
-                            match_ids=match_ids,
+                            flashscore_ids=flashscore_ids,
                         )
                         logger.info(
                             f"Successfully completed odds scraping for "
@@ -344,22 +344,22 @@ class FlexibleScraper(BaseScraper):
         """
         # Use UNION ALL for better performance than multiple DISTINCT operations
         query = """
-            SELECT 'sports' as type, s.name as value
-            FROM sports s
-            WHERE EXISTS (SELECT 1 FROM match_ids m WHERE m.sport_id = s.id)
+            SELECT 'sport_ids' as type, s.name as value
+            FROM sport_ids s
+            WHERE EXISTS (SELECT 1 FROM flashscore_ids m WHERE m.sport_id = s.id)
             UNION ALL
             SELECT 'leagues', m.league
-            FROM (SELECT DISTINCT league FROM match_ids) m
+            FROM (SELECT DISTINCT league FROM flashscore_ids) m
             UNION ALL
             SELECT 'seasons', m.season
-            FROM (SELECT DISTINCT season FROM match_ids) m
+            FROM (SELECT DISTINCT season FROM flashscore_ids) m
             UNION ALL
             SELECT 'countries', m.country
-            FROM (SELECT DISTINCT country FROM match_ids) m
+            FROM (SELECT DISTINCT country FROM flashscore_ids) m
         """
 
         available_filters: Dict[str, Set[str]] = {
-            "sports": set(),
+            "sport_ids": set(),
             "leagues": set(),
             "seasons": set(),
             "countries": set(),
@@ -382,7 +382,7 @@ class FlexibleScraper(BaseScraper):
 if __name__ == "__main__":
     # Example usage with type-safe filter definition
     filters = {
-        "sports": ["handball"],
+        "sport_ids": ["handball"],
         "leagues": ["Kvindeligaen Women"],
         "seasons": ["2023/2024"],
         "countries": ["Denmark"],

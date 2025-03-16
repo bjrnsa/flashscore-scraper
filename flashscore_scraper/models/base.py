@@ -13,13 +13,12 @@ class MatchResult(BaseModel):
 
     country: str
     league: str
-    season: str
-    match_info: str
+    season: int
     datetime: str
     home_team: str
     away_team: str
-    home_score: int
-    away_score: int
+    home_goals: int
+    away_goals: int
     result: int
     sport_id: int
     flashscore_id: str
@@ -31,7 +30,7 @@ class MatchResult(BaseModel):
             raise ValueError("Result must be -1 (away win), 0 (draw), or 1 (home win)")
         return v
 
-    @field_validator("home_score", "away_score")
+    @field_validator("home_goals", "away_goals")
     def validate_scores(cls, v: int) -> int:
         """Validate scores are non-negative."""
         if v < 0:
@@ -48,6 +47,7 @@ class LeagueConfig(BaseModel):
     country: str
     url: HttpUrl
     seasons: List[int]
+    url_pattern: str
 
     @field_validator("seasons")
     def validate_seasons(cls, seasons: List[int]) -> List[int]:
@@ -74,7 +74,7 @@ class FlashscoreConfig(BaseModel):
 
     model_config = ConfigDict(strict=True)
 
-    sports: Dict[str, SportConfig]
+    sport_ids: Dict[str, SportConfig]
 
 
 class MatchOdds(BaseModel):

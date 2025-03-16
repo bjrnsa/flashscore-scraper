@@ -39,8 +39,8 @@ class BaseScraper:
     # Common constants
     BASE_URL = "https://www.flashscore.com"
     DEFAULT_BATCH_SIZE = 100
-    TIMEOUT = 5
-    CLICK_DELAY = 0.5
+    TIMEOUT = 3
+    CLICK_DELAY = 0.1
 
     # Rate limiting constants
     MAX_REQUESTS_PER_MINUTE = 120

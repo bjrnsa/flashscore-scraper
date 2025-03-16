@@ -105,7 +105,7 @@ class MatchIDScraper(BaseScraper):
             Set of existing match IDs.
         """
         query = """
-        SELECT match_id FROM match_ids
+        SELECT flashscore_id FROM flashscore_ids
         WHERE sport_id = ? AND league = ? AND season = ?
         """
         with self.db_manager.get_cursor() as cursor:
@@ -130,14 +130,20 @@ class MatchIDScraper(BaseScraper):
 
         try:
             raw_config = yaml.safe_load(self.config_path.read_text())
-            config = FlashscoreConfig(sports=raw_config.get("sports", {}))
+            config = FlashscoreConfig(sport_ids=raw_config.get("sport_ids", {}))
 
             return {
                 sport_name.lower(): [
-                    (league.name, league.country, str(league.url), league.seasons)
+                    (
+                        league.name,
+                        league.country,
+                        str(league.url),
+                        league.seasons,
+                        league.url_pattern,
+                    )
                     for league in sport_data.leagues
                 ]
-                for sport_name, sport_data in config.sports.items()
+                for sport_name, sport_data in config.sport_ids.items()
             }
 
         except (yaml.YAMLError, ValueError) as e:
@@ -176,7 +182,7 @@ class MatchIDScraper(BaseScraper):
             The URL of the league season page to scrape. Must be a valid
             Flashscore URL containing match results.
         is_fixture : bool, optional
-            Whether the URL is for fixtures, by default False
+            Whether the URL is for upcoming_fixtures, by default False
 
         Returns:
         -------
@@ -197,7 +203,7 @@ class MatchIDScraper(BaseScraper):
         if not url or not urlparse(url).scheme or not urlparse(url).netloc:
             raise ValueError(f"Invalid URL format: {url}")
 
-        match_ids = set()
+        flashscore_ids = set()
         try:
             with browser.get_driver(url) as driver:
                 # Load all available matches
@@ -209,7 +215,7 @@ class MatchIDScraper(BaseScraper):
 
                 if not matches:
                     logger.warning(f"No matches found at URL: {url}")
-                    return match_ids
+                    return flashscore_ids
 
                 # Extract and validate match IDs
                 for element in matches:
@@ -217,16 +223,16 @@ class MatchIDScraper(BaseScraper):
                         logger.debug("Skipping invalid match element")
                         continue
 
-                    match_id = str(element.attrs["id"]).split("_")[-1]
-                    if match_id.isalnum():
-                        match_ids.add(match_id)
+                    flashscore_id = str(element.attrs["id"]).split("_")[-1]
+                    if flashscore_id.isalnum():
+                        flashscore_ids.add(flashscore_id)
                     else:
-                        logger.debug(f"Skipping invalid match ID: {match_id}")
+                        logger.debug(f"Skipping invalid match ID: {flashscore_id}")
 
                 logger.info(
-                    f"Found {len(match_ids)} unique {'fixture' if is_fixture else 'match'} IDs"
+                    f"Found {len(flashscore_ids)} unique {'fixture' if is_fixture else 'match'} IDs"
                 )
-                return match_ids
+                return flashscore_ids
 
         except TimeoutException as e:
             error_msg = f"Timed out while loading matches from {url}"
@@ -252,7 +258,8 @@ class MatchIDScraper(BaseScraper):
         """
         with self.db_manager.get_cursor() as cursor:
             cursor.execute(
-                "SELECT match_id FROM match_ids WHERE sport_id = ?", (sport_id,)
+                "SELECT flashscore_id FROM flashscore_ids WHERE sport_id = ?",
+                (sport_id,),
             )
             return {row[0] for row in cursor.fetchall()}
 
@@ -264,15 +271,17 @@ class MatchIDScraper(BaseScraper):
         fixtures_url = url.replace("/results/", "/fixtures/")
         return self._extract_ids(browser, fixtures_url, is_fixture=True)
 
-    def _store_match_ids(self, records: List[Tuple], is_fixture: bool = False) -> bool:
-        """Store match IDs in the match_ids table.
+    def _store_flashscore_ids(
+        self, records: List[Tuple], is_fixture: bool = False
+    ) -> bool:
+        """Store match IDs in the flashscore_ids table.
 
         Parameters
         ----------
         records : List[Tuple]
-            List of tuples containing match ID, sport ID, source, country, league, and season
+            List of tuples containing match ID, sport ID, country, league, and season
         is_fixture : bool, optional
-            Whether the records are for fixtures, by default False
+            Whether the records are for upcoming_fixtures, by default False
 
         Returns:
         -------
@@ -280,24 +289,74 @@ class MatchIDScraper(BaseScraper):
             True if storage was successful, False otherwise
         """
         query = """
-            INSERT INTO match_ids
-            (match_id, sport_id, source, country, league, season)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO flashscore_ids
+            (flashscore_id, sport_id,  country, league, season)
+            VALUES (?, ?, ?, ?, ?)
         """
         return bool(self.execute_query(query, records))
 
-    def _cleanup_completed_fixtures(self) -> None:
-        """Remove fixtures that have been completed and added to match_data."""
+    def _cleanup_completed_upcoming_fixtures(self) -> None:
+        """Remove upcoming_fixtures that have been completed and added to match_data."""
         try:
             with self.db_manager.get_cursor() as cursor:
                 cursor.execute(
-                    "DELETE FROM fixtures WHERE flashscore_id IN (SELECT flashscore_id FROM match_data)"
+                    "DELETE FROM upcoming_fixtures WHERE flashscore_id IN (SELECT flashscore_id FROM match_data)"
                 )
         except Exception as e:
-            logger.error(f"Failed to cleanup completed fixtures: {str(e)}")
+            logger.error(f"Failed to cleanup completed upcoming_fixtures: {str(e)}")
+
+    def _is_season_already_scraped(
+        self, sport_id: int, league: str, season: str
+    ) -> bool:
+        """Check if a season has been completely scraped before.
+
+        Parameters
+        ----------
+        sport_id : int
+            The ID of the sport
+        league : str
+            The name of the league
+        season : str
+            The season identifier (e.g., "2023/2024")
+
+        Returns:
+        -------
+        bool
+            True if the season has been completely scraped, False otherwise
+        """
+        query = """
+            SELECT is_complete
+            FROM scraped_seasons
+            WHERE sport_id = ? AND league = ? AND season = ?
+        """
+        with self.db_manager.get_cursor() as cursor:
+            cursor.execute(query, (sport_id, league, season))
+            result = cursor.fetchone()
+            return bool(result and result[0])
+
+    def _mark_season_as_scraped(self, sport_id: int, league: str, season: str) -> None:
+        """Mark a season as completely scraped.
+
+        Parameters
+        ----------
+        sport_id : int
+            The ID of the sport
+        league : str
+            The name of the league
+        season : str
+            The season identifier (e.g., "2023/2024")
+        """
+        query = """
+            INSERT INTO scraped_seasons (sport_id, league, season, is_complete)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(sport_id, league, season)
+            DO UPDATE SET is_complete = 1, last_scraped = CURRENT_TIMESTAMP
+        """
+        with self.db_manager.get_cursor() as cursor:
+            cursor.execute(query, (sport_id, league, season))
 
     def scrape(self, headless: bool = True) -> Dict[str, Dict[str, int]]:
-        """Main scraping workflow for collecting match IDs and fixtures from Flashscore.
+        """Main scraping workflow for collecting match IDs and upcoming_fixtures from Flashscore.
 
         Parameters
         ----------
@@ -307,8 +366,8 @@ class MatchIDScraper(BaseScraper):
         Returns:
         -------
         Dict[str, Dict[str, int]]
-            Dictionary mapping sport names to counts of new results and fixtures
-            Example: {'football': {'results': 150, 'fixtures': 75}}
+            Dictionary mapping sport names to counts of new results and upcoming_fixtures
+            Example: {'football': {'results': 150, 'upcoming_fixtures': 75}}
 
         Raises:
         ------
@@ -321,32 +380,46 @@ class MatchIDScraper(BaseScraper):
             results = {}
 
             logger.info("Starting match ID and fixture scraping process")
-            total_sports = len(sport_leagues)
-            processed_sports = 0
+            total_sport_ids = len(sport_leagues)
+            processed_sport_ids = 0
 
             for sport_name, leagues in sport_leagues.items():
                 try:
-                    processed_sports += 1
+                    processed_sport_ids += 1
                     logger.info(
-                        f"Processing sport {processed_sports}/{total_sports}: {sport_name}"
+                        f"Processing sport {processed_sport_ids}/{total_sport_ids}: {sport_name}"
                     )
 
                     sport_id = self.db_manager.register_sport(sport_name)
                     existing_ids = self._get_existing_ids(sport_id)
-                    sport_results = {"results": 0, "fixtures": 0}
+                    sport_results = {"results": 0, "upcoming_fixtures": 0}
                     failed_leagues = []
 
-                    for league, country, base_url, seasons in tqdm(
+                    for league, country, base_url, seasons, url_pattern in tqdm(
                         leagues, desc=f"Processing {sport_name} leagues"
                     ):
                         current_season = max(seasons)  # Get current season
-
-                        # Process historical results
                         for season in seasons:
-                            try:
-                                season_str = f"{season - 1}/{season}"
-                                url = f"{base_url}-{season - 1}-{season}/results/"
+                            season_str = f"{season - 1}/{season}"
 
+                            # Skip if historical season is already scraped
+                            if (
+                                season < current_season
+                                and self._is_season_already_scraped(
+                                    sport_id, league, season
+                                )
+                            ):
+                                logger.info(
+                                    f"Skipping {league} {season_str} - already fully scraped"
+                                )
+                                continue
+                            previous_season = season - 1
+                            url = url_pattern.format(
+                                base_url=base_url,
+                                previous_season=previous_season,
+                                season=season,
+                            )
+                            try:
                                 logger.debug(
                                     f"Scraping results for {league} {season_str}"
                                 )
@@ -355,24 +428,28 @@ class MatchIDScraper(BaseScraper):
                                 if new_ids:
                                     records = [
                                         (
-                                            id_,
+                                            flashscore_id,
                                             sport_id,
-                                            "flashscore",
                                             country,
                                             league,
-                                            season_str,
+                                            season,
                                         )
-                                        for id_ in new_ids
+                                        for flashscore_id in new_ids
                                     ]
 
-                                    if self._store_match_ids(records):
+                                    if self._store_flashscore_ids(records):
                                         sport_results["results"] += len(new_ids)
                                         logger.info(
                                             f"Found {len(new_ids)} new matches in {league} {season_str}"
                                         )
+                                        # Mark season as scraped only if we found and stored matches
+                                        if season < current_season:
+                                            self._mark_season_as_scraped(
+                                                sport_id, league, season
+                                            )
                                     else:
                                         failed_leagues.append(
-                                            (league, season_str, "results")
+                                            (league, season, "results")
                                         )
 
                             except Exception as e:
@@ -384,13 +461,15 @@ class MatchIDScraper(BaseScraper):
 
                         # Process fixtures for current season
                         try:
-                            current_season_str = (
-                                f"{current_season - 1}/{current_season}"
+                            previous_season = current_season - 1
+                            fixture_url = url_pattern.format(
+                                base_url=base_url,
+                                previous_season=previous_season,
+                                season=current_season,
                             )
-                            fixture_url = f"{base_url}-{current_season - 1}-{current_season}/fixtures/"
 
                             logger.debug(
-                                f"Scraping fixtures for {league} {current_season - 1}/{current_season}"
+                                f"Scraping fixtures for {league} {current_season}"
                             )
                             new_fixture_ids = (
                                 self._extract_fixture_ids(browser, fixture_url)
@@ -402,18 +481,19 @@ class MatchIDScraper(BaseScraper):
                                     (
                                         id_,
                                         sport_id,
-                                        "flashscore",
                                         country,
                                         league,
-                                        current_season_str,
+                                        current_season,
                                     )
                                     for id_ in new_fixture_ids
                                 ]
 
-                                if self._store_match_ids(
+                                if self._store_flashscore_ids(
                                     fixture_records, is_fixture=True
                                 ):
-                                    sport_results["fixtures"] += len(new_fixture_ids)
+                                    sport_results["upcoming_fixtures"] += len(
+                                        new_fixture_ids
+                                    )
                                     logger.info(
                                         f"Found {len(new_fixture_ids)} new fixtures in {league}"
                                     )
@@ -431,8 +511,8 @@ class MatchIDScraper(BaseScraper):
                             )
                             continue
 
-                    # Cleanup completed fixtures
-                    self._cleanup_completed_fixtures()
+                    # Cleanup completed upcoming_fixtures
+                    self._cleanup_completed_upcoming_fixtures()
                     results[sport_name] = sport_results
 
                     if failed_leagues:
@@ -442,7 +522,7 @@ class MatchIDScraper(BaseScraper):
 
                 except Exception as e:
                     logger.error(f"Failed to process sport {sport_name}: {str(e)}")
-                    results[sport_name] = {"results": 0, "fixtures": 0}
+                    results[sport_name] = {"results": 0, "upcoming_fixtures": 0}
                     continue
 
             logger.info("Match ID and fixture scraping completed")
@@ -456,8 +536,8 @@ class MatchIDScraper(BaseScraper):
 
 if __name__ == "__main__":
     scraper = MatchIDScraper()
-    results = scraper.scrape(headless=False)
+    results = scraper.scrape(headless=True)
     for sport, counts in results.items():
         print(
-            f"Scraped {counts['results']} results and {counts['fixtures']} fixtures for {sport}"
+            f"Scraped {counts['results']} results and {counts['upcoming_fixtures']} upcoming_fixtures for {sport}"
         )

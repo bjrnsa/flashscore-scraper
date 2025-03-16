@@ -1,6 +1,5 @@
 """Database management module for Flashscore scraping."""
 
-import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,62 +30,91 @@ class DatabaseManager:
             cursor.execute("PRAGMA journal_mode = WAL")
             cursor.execute("PRAGMA synchronous = NORMAL")
             cursor.execute("PRAGMA cache_size = -10000")  # 10MB cache
+            cursor.execute("PRAGMA foreign_keys = ON")
 
-            # Create sports table
+            # Create sport_ids table
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS sports (
+                CREATE TABLE IF NOT EXISTS sport_ids (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            # Create match IDs table (generic for all sports)
+            # Create scraped_seasons table
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS match_ids (
-                    match_id TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS scraped_seasons (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     sport_id INTEGER NOT NULL,
-                    source TEXT NOT NULL,
-                    country TEXT,
-                    league TEXT,
-                    season TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (sport_id) REFERENCES sports (id)
+                    league TEXT NOT NULL,
+                    season INTEGER  NOT NULL,
+                    is_complete BOOLEAN DEFAULT 0,
+                    last_scraped TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (sport_id) REFERENCES sport_ids (id),
+                    UNIQUE(sport_id, league, season)
                 )
             """)
 
-            # Create match data table (generic for all sports)
+            # Create match IDs table (generic for all sport_ids)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS flashscore_ids (
+                    flashscore_id TEXT PRIMARY KEY,
+                    sport_id INTEGER NOT NULL,
+                    country TEXT,
+                    league TEXT,
+                    season INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (sport_id) REFERENCES sport_ids (id)
+                )
+            """)
+
+            # Create indexes for flashscore_ids
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashscore_sport ON flashscore_ids(sport_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashscore_league ON flashscore_ids(league)"
+            )
+
+            # Create match data table (generic for all sport_ids)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS match_data (
                     flashscore_id TEXT PRIMARY KEY,
                     sport_id INTEGER NOT NULL,
                     country TEXT,
                     league TEXT,
-                    season TEXT,
-                    match_info TEXT,
+                    season INTEGER,
                     datetime TEXT,
                     home_team TEXT,
                     away_team TEXT,
-                    home_score INTEGER,
-                    away_score INTEGER,
+                    home_goals INTEGER,
+                    away_goals INTEGER,
                     result INTEGER,
                     additional_data JSON,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (flashscore_id) REFERENCES match_ids (match_id),
-                    FOREIGN KEY (sport_id) REFERENCES sports (id)
+                    FOREIGN KEY (flashscore_id) REFERENCES flashscore_ids (flashscore_id),
+                    FOREIGN KEY (sport_id) REFERENCES sport_ids (id)
                 )
             """)
 
-            # Create bookmakers table
+            # Create indexes for match_data
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_match_sport ON match_data(sport_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_match_datetime ON match_data(datetime)"
+            )
+
+            # Create bookmaker_ids table
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS bookmakers (
+                CREATE TABLE IF NOT EXISTS bookmaker_ids (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT UNIQUE NOT NULL
+                    name TEXT UNIQUE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            # Modify odds_data table to reference bookmakers
-            # Draw odds can be null
+            # Create odds_data table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS odds_data (
                     id INTEGER PRIMARY KEY,
@@ -97,30 +125,42 @@ class DatabaseManager:
                     draw_odds REAL,
                     away_odds REAL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (flashscore_id) REFERENCES match_ids (match_id),
-                    FOREIGN KEY (sport_id) REFERENCES sports (id),
-                    FOREIGN KEY (bookmaker_id) REFERENCES bookmakers (id),
+                    FOREIGN KEY (flashscore_id) REFERENCES flashscore_ids (flashscore_id),
+                    FOREIGN KEY (sport_id) REFERENCES sport_ids (id),
+                    FOREIGN KEY (bookmaker_id) REFERENCES bookmaker_ids (id),
                     UNIQUE(flashscore_id, bookmaker_id)
                 )
             """)
 
-            # Create fixtures table for upcoming matches
+            # Create indexes for odds_data
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_odds_flashscore ON odds_data(flashscore_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_odds_bookmaker ON odds_data(bookmaker_id)"
+            )
+
+            # Create upcoming_fixtures table
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS fixtures (
+                CREATE TABLE IF NOT EXISTS upcoming_fixtures (
                     flashscore_id TEXT PRIMARY KEY,
                     sport_id INTEGER NOT NULL,
                     country TEXT,
                     league TEXT,
-                    season TEXT,
-                    match_info TEXT,
+                    season INTEGER,
                     datetime TEXT,
                     home_team TEXT,
                     away_team TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (flashscore_id) REFERENCES match_ids (match_id),
-                    FOREIGN KEY (sport_id) REFERENCES sports (id)
+                    FOREIGN KEY (flashscore_id) REFERENCES flashscore_ids (flashscore_id),
+                    FOREIGN KEY (sport_id) REFERENCES sport_ids (id)
                 )
             """)
+
+            # Create indexes for upcoming_fixtures
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_upcoming_datetime ON upcoming_fixtures(datetime)"
+            )
 
     def register_sport(self, sport_name: str) -> int:
         """Register a new sport in the database.
@@ -134,21 +174,63 @@ class DatabaseManager:
         -------
         int
             ID of the registered sport
-
         """
         with self.get_cursor() as cursor:
             cursor.execute(
                 """
-                INSERT OR IGNORE INTO sports (name)
+                INSERT OR IGNORE INTO sport_ids (name)
                 VALUES (?)
-            """,
+                """,
                 (sport_name.lower(),),
             )
 
             cursor.execute(
-                "SELECT id FROM sports WHERE name = ?", (sport_name.lower(),)
+                "SELECT id FROM sport_ids WHERE name = ?", (sport_name.lower(),)
             )
             return cursor.fetchone()[0]
+
+    def register_bookmaker(self, bookmaker_name: str) -> int:
+        """Register a new bookmaker in the database.
+
+        Parameters
+        ----------
+        bookmaker_name : str
+            Name of the bookmaker to register
+
+        Returns:
+        -------
+        int
+            ID of the registered bookmaker
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO bookmaker_ids (name)
+                VALUES (?)
+                """,
+                (bookmaker_name,),
+            )
+
+            cursor.execute(
+                "SELECT id FROM bookmaker_ids WHERE name = ?", (bookmaker_name,)
+            )
+            return cursor.fetchone()[0]
+
+    def is_connection_valid(self) -> bool:
+        """Check if the current database connection is valid.
+
+        Returns:
+        -------
+        bool
+            True if connection is valid, False otherwise
+        """
+        if not self._connection:
+            return False
+        try:
+            self._connection.execute("SELECT 1")
+            return True
+        except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+            return False
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create a database connection with optimized settings.
@@ -158,12 +240,10 @@ class DatabaseManager:
         sqlite3.Connection
             Optimized database connection
         """
-        if self._connection is None:
+        if not self.is_connection_valid():
+            if self._connection:
+                self._connection.close()
             conn = sqlite3.connect(self.db_path, timeout=30.0)
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA synchronous = NORMAL")
-            conn.execute("PRAGMA cache_size = -10000")  # 10MB cache
             conn.row_factory = sqlite3.Row
             self._connection = conn
         return self._connection
@@ -176,6 +256,13 @@ class DatabaseManager:
         ------
         Generator[sqlite3.Cursor, None, None]
             A database cursor within a transaction
+
+        Raises:
+        ------
+        sqlite3.OperationalError
+            If database is locked after max retries
+        sqlite3.Error
+            For other SQLite related errors
         """
         max_retries = 3
         retry_delay = 1
@@ -197,186 +284,79 @@ class DatabaseManager:
                     if self._connection:
                         self._connection.close()
                         self._connection = None
-            except Exception:
+            except Exception as e:
                 if self._connection:
                     self._connection.close()
                     self._connection = None
-                raise
+                raise e  # Re-raise the original exception for better debugging
 
-    def close(self) -> None:
-        """Close the database connection."""
-        if self._connection:
-            self._connection.close()
-            self._connection = None
+    def optimize_database(self) -> None:
+        """Optimize the database by running VACUUM and analyzing indexes."""
+        with self.get_cursor() as cursor:
+            cursor.execute("VACUUM")
+            cursor.execute("ANALYZE")
 
     def clear_table(self, table_name: str) -> None:
-        """Clears all data from a specified table.
+        """Clear all data from a specified table.
 
         Parameters
         ----------
         table_name : str
-            The name of the table to clear (e.g., 'match_data', 'odds_data').
+            The name of the table to clear
 
         Raises:
         ------
         ValueError
-            If the specified table name is not allowed.
-
+            If the specified table name is not allowed
         """
-        allowed_tables = {"match_data", "odds_data"}
+        allowed_tables = {
+            "match_data",
+            "odds_data",
+            "flashscore_ids",
+            "upcoming_fixtures",
+        }
         if table_name not in allowed_tables:
             raise ValueError(
                 f"Table name '{table_name}' is not allowed. Allowed tables are: {sorted(allowed_tables)}"
             )
 
         with self.get_cursor() as cursor:
-            cursor.execute(
-                f"DELETE FROM {table_name}"
-            )  # Safe after allowlist validation
+            cursor.execute(f"DELETE FROM {table_name}")
             print(f"Table '{table_name}' has been cleared.")
 
-    def override_match_result(self, flashscore_id: str, match_data: dict) -> None:
-        """Override match result for exceptional cases.
-
-        This method allows manual insertion or update of match results that cannot be
-        scraped normally, such as matches decided by administrative decisions.
-
-        Parameters
-        ----------
-        flashscore_id : str
-            The FlashScore ID of the match
-        match_data : dict
-            Dictionary containing match data with keys matching match_data table columns:
-            - sport_id (required): Integer ID of the sport
-            - country (required): Country where the match was played
-            - league (required): League/competition name
-            - season (required): Season identifier (e.g., "2023/2024")
-            - match_info (required): Additional match information
-            - datetime (required): Match date and time
-            - home_team (required): Home team name
-            - away_team (required): Away team name
-            - home_score (required): Home team score
-            - away_score (required): Away team score
-            - result (required): Match result (-1: away win, 0: draw, 1: home win)
-            - additional_data (optional): JSON-serializable dict with additional details
-
-
-        Raises:
-        ------
-        ValueError
-            If required fields are missing or invalid
-        sqlite3.Error
-            If database operation fails
-        """
-        required_fields = {
-            "sport_id",
-            "country",
-            "league",
-            "season",
-            "match_info",
-            "datetime",
-            "home_team",
-            "away_team",
-            "home_score",
-            "away_score",
-            "result",
-        }
-
-        # Validate required fields
-        missing_fields = required_fields - set(match_data.keys())
-        if missing_fields:
-            raise ValueError(f"Missing required fields: {missing_fields}")
-
-        # Validate result value
-        if match_data["result"] not in {-1, 0, 1}:
-            raise ValueError("Result must be -1 (away win), 0 (draw), or 1 (home win)")
-
-        try:
-            with self.get_cursor() as cursor:
-                # First check if match_id exists in match_ids table
-                cursor.execute(
-                    "SELECT 1 FROM match_ids WHERE match_id = ?", (flashscore_id,)
-                )
-                if not cursor.fetchone():
-                    raise ValueError(
-                        f"Match ID {flashscore_id} not found in match_ids table"
-                    )
-
-                # Convert additional_data to JSON if present
-                additional_data = (
-                    json.dumps(match_data.get("additional_data"))
-                    if "additional_data" in match_data
-                    else None
-                )
-
-                # Insert or update match data with override flag
-                cursor.execute(
-                    """
-                    INSERT INTO match_data (
-                        flashscore_id, sport_id, country, league, season,
-                        match_info, datetime, home_team, away_team,
-                        home_score, away_score, result,
-                        additional_data
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(flashscore_id) DO UPDATE SET
-                        sport_id = excluded.sport_id,
-                        country = excluded.country,
-                        league = excluded.league,
-                        season = excluded.season,
-                        match_info = excluded.match_info,
-                        datetime = excluded.datetime,
-                        home_team = excluded.home_team,
-                        away_team = excluded.away_team,
-                        home_score = excluded.home_score,
-                        away_score = excluded.away_score,
-                        result = excluded.result,
-                        additional_data = excluded.additional_data
-                        """,
-                    (
-                        flashscore_id,
-                        match_data["sport_id"],
-                        match_data["country"],
-                        match_data["league"],
-                        match_data["season"],
-                        match_data["match_info"],
-                        match_data["datetime"],
-                        match_data["home_team"],
-                        match_data["away_team"],
-                        match_data["home_score"],
-                        match_data["away_score"],
-                        match_data["result"],
-                        additional_data,
-                    ),
-                )
-
-        except sqlite3.Error as e:
-            raise sqlite3.Error(f"Database error during match override: {str(e)}")
-        except Exception as e:
-            raise ValueError(f"Error during match override: {str(e)}")
-
     def drop_table(self, table_name: str) -> None:
-        """Drops a specified table.
+        """Drop a specified table.
 
         Parameters
         ----------
         table_name : str
-            The name of the table to drop (e.g., 'match_data', 'odds_data').
+            The name of the table to drop
 
         Raises:
         ------
         ValueError
-            If the specified table name is not allowed.
-
+            If the specified table name is not allowed
         """
-        allowed_tables = ["match_data", "odds_data"]
+        allowed_tables = {
+            "match_data",
+            "odds_data",
+            "flashscore_ids",
+            "upcoming_fixtures",
+        }
         if table_name not in allowed_tables:
             raise ValueError(
-                f"Table name '{table_name}' is not allowed. Allowed tables are: {allowed_tables}"
+                f"Table name '{table_name}' is not allowed. Allowed tables are: {sorted(allowed_tables)}"
             )
 
         with self.get_cursor() as cursor:
             cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
             print(f"Table '{table_name}' has been dropped.")
+
+    def close(self) -> None:
+        """Close the database connection."""
+        if self._connection:
+            self._connection.close()
+            self._connection = None
 
 
 if __name__ == "__main__":

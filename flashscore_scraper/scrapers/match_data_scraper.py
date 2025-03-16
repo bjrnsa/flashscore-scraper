@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from bs4 import BeautifulSoup, Tag
@@ -35,24 +36,81 @@ class MatchDataScraper(BaseScraper):
         super().__init__(db_path)
         self.db_manager = self.get_database()
 
-    def _calculate_season(self, month: int, year: int) -> str:
-        return f"{year}/{year + 1}" if month >= 8 else f"{year - 1}/{year}"
+    def update(
+        self,
+        days: int = 3,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        headless: bool = True,
+    ) -> Dict[str, int]:
+        """Update match data for matches from the last specified days.
 
-    def _parse_datetime(self, dt_str: str) -> Tuple[str, int, int]:
-        date_parts = dt_str.split(".")
-        _, month = map(int, date_parts[:2])
-        year = int(date_parts[2].split()[0])
-        return dt_str, month, year
+        Parameters
+        ----------
+        days : int, optional
+            Number of days to look back, by default 3
+        batch_size : int, optional
+            Size of batches for processing, by default DEFAULT_BATCH_SIZE
+        headless : bool, optional
+            Whether to run browser in headless mode, by default True
 
-    def _extract_tournament_info(self, header: Tag) -> Tuple[str, str, str]:
-        tournament_info = header.text
-        try:
-            country = tournament_info.split(":")[0].strip()
-            league = tournament_info.split(":")[1].strip().split("-")[0].strip()
-            match_info = tournament_info.split(" - ")[-1].strip()
-            return country, league, match_info
-        except IndexError:
-            raise ParsingException("Invalid tournament info format")
+        Returns:
+        -------
+        Dict[str, int]
+            Dictionary with sport names as keys and number of updated matches as values
+        """
+        with self.db_manager.get_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT m.flashscore_id, s.name as sport_name, s.id as sport_id,
+                    m.country, m.league, m.season
+                FROM match_data m
+                JOIN sport_ids s ON m.sport_id = s.id
+                WHERE DATE(m.datetime) >= DATE('now', '-' || ? || ' days')
+                ORDER BY s.name, m.datetime DESC
+            """,
+                (days,),
+            )
+            matches = cursor.fetchall()
+
+        return self.scrape(batch_size=batch_size, headless=headless, matches=matches)
+
+    def update_upcoming_fixtures(
+        self,
+        days: int = 3,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        headless: bool = True,
+    ) -> Dict[str, int]:
+        """Update upcoming fixtures for matches from the last specified days.
+
+        Parameters
+        ----------
+        days : int, optional
+            Number of days to look back, by default 3
+        batch_size : int, optional
+            Size of batches for processing, by default DEFAULT_BATCH_SIZE
+        headless : bool, optional
+            Whether to run browser in headless mode, by default True
+
+        Returns:
+        -------
+        Dict[str, int]
+            Dictionary with sport names as keys and number of updated matches as values
+        """
+        with self.db_manager.get_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT m.flashscore_id, s.name as sport_name, s.id as sport_id,
+                    m.country, m.league, m.season
+                FROM upcoming_fixtures m
+                JOIN sport_ids s ON m.sport_id = s.id
+                WHERE DATE(m.datetime) <= DATE('now', '-' || ? || ' days')
+                ORDER BY s.name, m.datetime DESC
+            """,
+                (days,),
+            )
+            matches = cursor.fetchall()
+
+        return self.scrape(batch_size=batch_size, headless=headless, matches=matches)
 
     def scrape(
         self,
@@ -66,11 +124,11 @@ class MatchDataScraper(BaseScraper):
         if not matches:
             with self.db_manager.get_cursor() as cursor:
                 cursor.execute("""
-                    SELECT m.match_id, s.name as sport_name, s.id as sport_id
-                    FROM match_ids m
-                    JOIN sports s ON m.sport_id = s.id
-                    LEFT JOIN match_data d ON m.match_id = d.flashscore_id
-                    LEFT JOIN fixtures f ON m.match_id = f.flashscore_id
+                    SELECT m.flashscore_id, s.name as sport_name, s.id as sport_id, m.country, m.league, m.season
+                    FROM flashscore_ids m
+                    JOIN sport_ids s ON m.sport_id = s.id
+                    LEFT JOIN match_data d ON m.flashscore_id = d.flashscore_id
+                    LEFT JOIN upcoming_fixtures f ON m.flashscore_id = f.flashscore_id
                     WHERE d.flashscore_id IS NULL AND f.flashscore_id IS NULL
                     ORDER BY s.name, m.created_at
                 """)
@@ -80,8 +138,10 @@ class MatchDataScraper(BaseScraper):
             return results
 
         sport_matches = {}
-        for match_id, sport_name, sport_id in matches:
-            sport_matches.setdefault(sport_name, []).append((match_id, sport_id))
+        for flashscore_id, sport_name, sport_id, country, league, season in matches:
+            sport_matches.setdefault(sport_name, []).append(
+                (flashscore_id, sport_id, country, league, season)
+            )
 
         browser = self.get_browser(headless)
         try:
@@ -92,11 +152,18 @@ class MatchDataScraper(BaseScraper):
                 with tqdm(
                     total=len(sport_data), desc=f"Scraping {sport_name} matches"
                 ) as pbar:
-                    for match_id, sport_id in sport_data:
+                    for flashscore_id, sport_id, country, league, season in sport_data:
                         try:
-                            url = f"{self.BASE_URL}{match_id}/#/match"
+                            url = f"{self.BASE_URL}{flashscore_id}/#/match"
                             match_data = self._process_match(
-                                browser, url, match_id, sport_id, sport_name
+                                browser,
+                                url,
+                                flashscore_id,
+                                sport_id,
+                                country,
+                                league,
+                                season,
+                                sport_name,
                             )
 
                             if match_data:
@@ -115,7 +182,7 @@ class MatchDataScraper(BaseScraper):
 
                         except Exception as e:
                             logger.error(
-                                f"Failed to process match {match_id}: {str(e)}"
+                                f"Failed to process match {flashscore_id}: {str(e)}"
                             )
                         finally:
                             pbar.update(1)
@@ -133,8 +200,11 @@ class MatchDataScraper(BaseScraper):
         self,
         browser: BrowserManager,
         url: str,
-        match_id: str,
+        flashscore_id: str,
         sport_id: int,
+        country: str,
+        league: str,
+        season: int,
         sport_name: str,
     ) -> Optional[Dict[str, Any]]:
         with browser.get_driver(url) as driver:
@@ -147,13 +217,15 @@ class MatchDataScraper(BaseScraper):
                 )
 
                 try:
-                    details = self._match_results(soup, match_id, sport_id).model_dump()
+                    details = self._match_results(
+                        soup, flashscore_id, sport_id, country, league, season
+                    ).model_dump()
                     additional = self._parse_additional_details(soup, sport_name)
 
                     if details and additional:
                         details.update(
                             {
-                                "flashscore_id": match_id,
+                                "flashscore_id": flashscore_id,
                                 "sport_id": sport_id,
                                 "additional": additional,
                             }
@@ -162,7 +234,7 @@ class MatchDataScraper(BaseScraper):
                 except (ParsingException, ValidationException):
                     try:
                         fixture_data = self._parse_fixture_data(
-                            soup, match_id, sport_id
+                            soup, flashscore_id, sport_id, country, league, season
                         )
                         if fixture_data and self._store_fixture(fixture_data):
                             return None
@@ -172,7 +244,13 @@ class MatchDataScraper(BaseScraper):
         return None
 
     def _match_results(
-        self, soup: BeautifulSoup, match_id: str, sport_id: int
+        self,
+        soup: BeautifulSoup,
+        flashscore_id: str,
+        sport_id: int,
+        country: str,
+        league: str,
+        season: int,
     ) -> MatchResult:
         header = soup.find("span", class_="tournamentHeader__country")
         if not header or not isinstance(header, Tag):
@@ -182,9 +260,7 @@ class MatchDataScraper(BaseScraper):
         if not dt_header:
             raise ParsingException("Could not find start time")
 
-        dt_str, month, year = self._parse_datetime(dt_header.text)
-        country, league, match_info = self._extract_tournament_info(header)
-
+        dt_str = datetime.strptime(dt_header.text, "%d.%m.%Y %H:%M").isoformat()
         home_team = soup.select_one(
             ".duelParticipant__home .participant__participantName"
         )
@@ -199,11 +275,11 @@ class MatchDataScraper(BaseScraper):
             raise ParsingException("Could not find final score")
 
         try:
-            home_score, away_score = map(
+            home_goals, away_goals = map(
                 int, final_score_element.text.strip().split("-")
             )
             result = (
-                1 if home_score > away_score else -1 if home_score < away_score else 0
+                1 if home_goals > away_goals else -1 if home_goals < away_goals else 0
             )
         except (ValueError, IndexError):
             raise ParsingException("Invalid score format")
@@ -211,16 +287,15 @@ class MatchDataScraper(BaseScraper):
         return MatchResult(
             country=country,
             league=league,
-            season=self._calculate_season(month, year),
-            match_info=match_info,
+            season=season,
             datetime=dt_str,
             home_team=home_team.text.strip(),
             away_team=away_team.text.strip(),
-            home_score=home_score,
-            away_score=away_score,
+            home_goals=home_goals,
+            away_goals=away_goals,
             result=result,
             sport_id=sport_id,
-            flashscore_id=match_id,
+            flashscore_id=flashscore_id,
         )
 
     def _parse_additional_details(
@@ -253,17 +328,15 @@ class MatchDataScraper(BaseScraper):
                 return None
 
             details = {}
-            for i, part in enumerate(
-                match_parts[::2]
-            ):  # Skip every other element (scores)
+            for i, part in enumerate(match_parts[::2]):
                 if i >= len(period_mapping):
                     continue
 
                 try:
                     period_key = list(period_mapping.values())[i]
                     scores = match_parts[i * 2 + 1].text.strip().split("-")
-                    details[f"home_score_{period_key}"] = int(scores[0])
-                    details[f"away_score_{period_key}"] = int(scores[1])
+                    details[f"home_goals_{period_key}"] = int(scores[0])
+                    details[f"away_goals_{period_key}"] = int(scores[1])
                 except (IndexError, ValueError):
                     continue
 
@@ -308,11 +381,11 @@ class MatchDataScraper(BaseScraper):
                     try:
                         # Get the score element that follows the period name
                         score_text = match_parts[i + 1].text.strip()
-                        home_score, away_score = map(int, score_text.split("-"))
+                        home_goals, away_goals = map(int, score_text.split("-"))
 
                         key = period_mapping[period_name]
-                        details[f"home_score_{key}"] = home_score
-                        details[f"away_score_{key}"] = away_score
+                        details[f"home_goals_{key}"] = home_goals
+                        details[f"away_goals_{key}"] = away_goals
                     except (IndexError, ValueError, AttributeError):
                         logger.warning(f"Failed to parse score for {period_name}")
                         continue
@@ -358,8 +431,8 @@ class MatchDataScraper(BaseScraper):
                     period_key, period_name = period_mapping[i]
                     home_value = int(home_part.get_text(strip=True))
                     away_value = int(away_part.get_text(strip=True))
-                    details[f"home_score_{period_key}"] = home_value
-                    details[f"away_score_{period_key}"] = away_value
+                    details[f"home_goals_{period_key}"] = home_value
+                    details[f"away_goals_{period_key}"] = away_value
                 except (ValueError, AttributeError):
                     logger.warning(f"Failed to parse score for {period_name}")
                     continue
@@ -382,8 +455,8 @@ class MatchDataScraper(BaseScraper):
 
         for i, (home_part, away_part) in enumerate(zip(home_parts, away_parts)):
             try:
-                details[f"home_score_set_{i + 1}"] = int(home_part.get_text(strip=True))
-                details[f"away_score_set_{i + 1}"] = int(away_part.get_text(strip=True))
+                details[f"home_goals_set_{i + 1}"] = int(home_part.get_text(strip=True))
+                details[f"away_goals_set_{i + 1}"] = int(away_part.get_text(strip=True))
             except (ValueError, AttributeError):
                 continue
 
@@ -441,7 +514,13 @@ class MatchDataScraper(BaseScraper):
             return None
 
     def _parse_fixture_data(
-        self, soup: BeautifulSoup, match_id: str, sport_id: int
+        self,
+        soup: BeautifulSoup,
+        flashscore_id: str,
+        sport_id: int,
+        country: str,
+        league: str,
+        season: int,
     ) -> Optional[Dict[str, Any]]:
         try:
             header = soup.find("span", class_="tournamentHeader__country")
@@ -456,16 +535,14 @@ class MatchDataScraper(BaseScraper):
             if not all([header, dt_header, home_team, away_team]):
                 return None
 
-            dt_str, month, year = self._parse_datetime(dt_header.text)
-            country, league, match_info = self._extract_tournament_info(header)
+            dt_str = datetime.strptime(dt_header.text, "%d.%m.%Y %H:%M")
 
             return {
-                "flashscore_id": match_id,
+                "flashscore_id": flashscore_id,
                 "sport_id": sport_id,
                 "country": country,
                 "league": league,
-                "season": self._calculate_season(month, year),
-                "match_info": match_info,
+                "season": season,
                 "datetime": dt_str,
                 "home_team": home_team.text.strip(),
                 "away_team": away_team.text.strip(),
@@ -475,13 +552,12 @@ class MatchDataScraper(BaseScraper):
 
     def _store_fixture(self, fixture_data: Dict[str, Any]) -> bool:
         query = """
-            INSERT INTO fixtures
+            INSERT INTO upcoming_fixtures
             (flashscore_id, sport_id, country, league, season,
-             match_info, datetime, home_team, away_team)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 datetime, home_team, away_team)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(flashscore_id) DO UPDATE SET
-            datetime = excluded.datetime,
-            match_info = excluded.match_info
+            datetime = excluded.datetime
         """
         try:
             with self.db_manager.get_cursor() as cursor:
@@ -496,12 +572,11 @@ class MatchDataScraper(BaseScraper):
             "country",
             "league",
             "season",
-            "match_info",
             "datetime",
             "home_team",
             "away_team",
-            "home_score",
-            "away_score",
+            "home_goals",
+            "away_goals",
             "result",
             "sport_id",
             "flashscore_id",
@@ -524,7 +599,12 @@ class MatchDataScraper(BaseScraper):
             if not records:
                 return False
 
-            query = f"INSERT INTO match_data ({','.join(fields)}) VALUES ({','.join(['?' for _ in fields])})"
+            # Changed to REPLACE to handle updates of existing records
+            query = f"""
+                INSERT OR REPLACE INTO match_data
+                ({",".join(fields)})
+                VALUES ({",".join(["?" for _ in fields])})
+            """
             return bool(self.execute_query(query, records))
 
         except Exception as e:
@@ -534,6 +614,5 @@ class MatchDataScraper(BaseScraper):
 
 if __name__ == "__main__":
     scraper = MatchDataScraper(db_path="database/database.db")
-    results = scraper.scrape(headless=True, batch_size=10)
-    for sport, count in results.items():
-        print(f"Scraped {count} matches for {sport}")
+    # results = scraper.update(days=10, batch_size=100, headless=True)
+    results = scraper.update_upcoming_fixtures(days=0, batch_size=100, headless=True)

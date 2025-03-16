@@ -18,8 +18,8 @@ class Volleyball(BaseDataLoader):
 
     # Volleyball-specific column mappings
     COLUMN_MAPPINGS: Dict[str, str] = {
-        "home_score": "home_sets",
-        "away_score": "away_sets",
+        "home_goals": "home_sets",
+        "away_goals": "away_sets",
     }
 
     # Required additional data fields for volleyball
@@ -62,9 +62,7 @@ class Volleyball(BaseDataLoader):
             include_additional_data=include_additional_data,
         )
         df = df.rename(columns=self.COLUMN_MAPPINGS)
-        df = self._add_common_features(
-            df, home_goals="home_sets", away_goals="away_sets"
-        )
+
         self.validate_data(df)
         return df
 

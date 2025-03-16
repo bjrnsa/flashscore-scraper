@@ -18,7 +18,7 @@ class BaseDataLoader(ABC):
     """Flexible data loader for multi-sport database with JSON additional data support.
 
     This class provides a unified interface for loading and processing data
-    from multiple sports, with support for sport-specific attributes stored
+    from multiple sport_ids, with support for sport-specific attributes stored
     in JSON format.
     """
 
@@ -94,7 +94,7 @@ class BaseDataLoader(ABC):
         ValueError
             If required tables are missing from the database
         """
-        required_tables = {"sports", "match_data", "match_ids", "odds_data"}
+        required_tables = {"sport_ids", "match_data", "flashscore_ids", "odds_data"}
 
         if self.conn is None:
             self.conn = self._create_connection()
@@ -108,7 +108,7 @@ class BaseDataLoader(ABC):
             raise ValueError(f"Missing required tables: {', '.join(missing)}")
 
         # Verify sport exists in the database
-        cursor.execute("SELECT id FROM sports WHERE name = ?", (self.sport,))
+        cursor.execute("SELECT id FROM sport_ids WHERE name = ?", (self.sport,))
         result = cursor.fetchone()
 
         if not result:
@@ -219,6 +219,7 @@ class BaseDataLoader(ABC):
         league: Optional[str] = None,
         seasons: Optional[List[str]] = None,
         date_range: Optional[Tuple[str, str]] = None,
+        country: Optional[str] = None,
         team_filters: Optional[Dict[str, Any]] = None,
         include_additional_data: bool = True,
     ) -> pd.DataFrame:
@@ -261,7 +262,7 @@ class BaseDataLoader(ABC):
                 SELECT
                     m.flashscore_id, m.country, m.league, m.season,
                     m.datetime, m.home_team, m.away_team,
-                    m.home_score, m.away_score, m.result, m.additional_data
+                    m.home_goals, m.away_goals, m.result, m.additional_data
                 FROM match_data m
                 WHERE m.sport_id = ?
                 AND m.home_team IN ({team_placeholders})
@@ -277,6 +278,11 @@ class BaseDataLoader(ABC):
                 query += " AND m.league = ?"
                 params.append(league)
 
+            # Add country filter if specified
+            if country:
+                query += " AND m.country = ?"
+                params.append(country)
+
             # Add season filter if specified
             if seasons:
                 season_placeholders = ", ".join(["?" for _ in seasons])
@@ -288,7 +294,7 @@ class BaseDataLoader(ABC):
                 query,
                 self.conn,
                 params=params,
-                parse_dates={"datetime": {"format": self.date_format}},
+                parse_dates="datetime",
             )
 
             # Apply date range filter if specified
@@ -307,12 +313,12 @@ class BaseDataLoader(ABC):
             self.logger.error(f"Error loading matches: {str(e)}")
             raise
 
-    def load_odds(self, match_ids: List[str]) -> pd.DataFrame:
+    def load_odds(self, flashscore_ids: List[str]) -> pd.DataFrame:
         """Load odds data for given match IDs.
 
         Parameters
         ----------
-        match_ids : List[str]
+        flashscore_ids : List[str]
             List of match IDs to load odds for
 
         Returns:
@@ -325,22 +331,24 @@ class BaseDataLoader(ABC):
         sqlite3.Error
             If there is a database error
         """
-        if not match_ids:
+        if not flashscore_ids:
             return pd.DataFrame()
 
         try:
             # Build query for odds data
             query = """
                 SELECT
-                    o.flashscore_id, o.bookmaker,
+                    o.flashscore_id,
+                    b.name as bookmaker_name,
                     o.home_odds, o.draw_odds, o.away_odds
                 FROM odds_data o
+                LEFT JOIN bookmaker_ids b ON o.bookmaker_id = b.id
                 WHERE o.sport_id = ?
                 AND o.flashscore_id IN ({id_placeholders})
-            """.format(id_placeholders=", ".join(["?" for _ in match_ids]))
+            """.format(id_placeholders=", ".join(["?" for _ in flashscore_ids]))
 
             params = [self.sport_id]
-            params.extend(match_ids)
+            params.extend(flashscore_ids)
 
             # Execute query
             odds_df = pd.read_sql(query, self.conn, params=params)
@@ -363,6 +371,7 @@ class BaseDataLoader(ABC):
         self,
         league: Optional[str] = None,
         seasons: Optional[List[str]] = None,
+        country: Optional[str] = None,
     ) -> pd.DataFrame:
         """Load fixture data for given league and seasons.
 
@@ -372,6 +381,7 @@ class BaseDataLoader(ABC):
             League name to filter by, by default None
         seasons : Optional[List[str]], optional
             List of season identifiers to filter by, by default None
+        country: Optional[str] = None,
 
         Returns:
         -------
@@ -389,7 +399,7 @@ class BaseDataLoader(ABC):
                 SELECT
                     f.flashscore_id, f.country, f.league, f.season,
                     f.datetime, f.home_team, f.away_team
-                FROM fixtures f
+                FROM upcoming_fixtures f
                 WHERE f.sport_id = ?
             """
             params = [self.sport_id]
@@ -398,6 +408,11 @@ class BaseDataLoader(ABC):
             if league:
                 query += " AND f.league = ?"
                 params.append(league)
+
+            # Add country filter if specified
+            if country:
+                query += " AND f.country = ?"
+                params.append(country)
 
             # Add season filter if specified
             if seasons:
@@ -410,13 +425,13 @@ class BaseDataLoader(ABC):
                 query,
                 self.conn,
                 params=params,
-                parse_dates={"datetime": {"format": self.date_format}},
+                parse_dates="datetime",
             )
 
             return df
 
         except sqlite3.Error as e:
-            self.logger.error(f"Database error loading fixtures: {str(e)}")
+            self.logger.error(f"Database error loading upcoming_fixtures: {str(e)}")
             raise
 
     def process_additional_data(
@@ -565,72 +580,6 @@ class BaseDataLoader(ABC):
             If sport-specific validation fails
         """
         pass
-
-    def _add_common_features(
-        self,
-        df: pd.DataFrame,
-        home_goals: str = "home_goals",
-        away_goals: str = "away_goals",
-    ) -> pd.DataFrame:
-        """Add common features to the DataFrame.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            DataFrame to add features to
-        home_goals: str, optional
-            Column name for home score, by default "home_goals"
-        away_goals : str, optional
-            Column name for away score, by default "away_goals"
-
-        Returns:
-        -------
-        pd.DataFrame
-            DataFrame with added features
-        """
-        if df.empty:
-            return df
-
-        # Add team indices
-        df = df.assign(
-            home_index=lambda x: x["home_team"].map(self.team_to_idx),
-            away_index=lambda x: x["away_team"].map(self.team_to_idx),
-        )
-
-        # Add goal difference and total goals
-        df = df.assign(
-            spread=lambda x: x[home_goals] - x[away_goals],
-            total_goals=lambda x: x[home_goals] + x[away_goals],
-        )
-
-        # Sort by datetime and set index
-        df = df.sort_values("datetime")
-
-        if "flashscore_id" in df.columns:
-            df = df.set_index("flashscore_id")
-
-        # Allow subclasses to add sport-specific features
-        df = self._add_sport_specific_features(df)
-
-        return df
-
-    def _add_sport_specific_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add sport-specific features to the DataFrame.
-
-        This method can be overridden by subclasses to add additional
-        features specific to each sport.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            DataFrame to add features to
-
-        Returns:
-        -------
-        pd.DataFrame
-            DataFrame with added sport-specific features
-        """
-        return df
 
     def close(self) -> None:
         """Close database connection."""

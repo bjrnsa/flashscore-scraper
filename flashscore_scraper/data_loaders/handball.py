@@ -14,16 +14,16 @@ class Handball(BaseDataLoader):
 
     # Handball-specific column mappings
     COLUMN_MAPPINGS: Dict[str, str] = {
-        "home_score": "home_goals",
-        "away_score": "away_goals",
+        "home_goals": "home_goals",
+        "away_goals": "away_goals",
     }
 
     # Required additional data fields for handball
     REQUIRED_ADDITIONAL_FIELDS: Dict[str, str] = {
-        "home_score_h1": "home_goals_h1",
-        "away_score_h1": "away_goals_h1",
-        "home_score_h2": "home_goals_h2",
-        "away_score_h2": "away_goals_h2",
+        "home_goals_h1": "home_goals_h1",
+        "away_goals_h1": "away_goals_h1",
+        "home_goals_h2": "home_goals_h2",
+        "away_goals_h2": "away_goals_h2",
     }
 
     def __init__(
@@ -42,6 +42,7 @@ class Handball(BaseDataLoader):
         date_range: Optional[Tuple[str, str]] = None,
         team_filters: Optional[Dict[str, Any]] = None,
         include_additional_data: bool = True,
+        country: Optional[str] = None,
     ) -> pd.DataFrame:
         """Load handball match data with optional filters."""
         df = self._load_matches(
@@ -50,9 +51,9 @@ class Handball(BaseDataLoader):
             date_range=date_range,
             team_filters=team_filters,
             include_additional_data=include_additional_data,
+            country=country,
         )
         df = df.rename(columns=self.COLUMN_MAPPINGS)
-        df = self._add_common_features(df)
         self.validate_data(df)
         return df
 
